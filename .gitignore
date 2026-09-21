@@ -8,6 +8,14 @@ node_modules
 /ui/tsconfig.tsbuildinfo
 vite.config.ts.timestamp-*
 
+# Devenv
+.devenv*
+devenv.local.nix
+devenv.local.yaml
+
+# direnv
+.direnv
+
 # Local secrets
 .env
 .env.*
