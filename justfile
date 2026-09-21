@@ -1,6 +1,6 @@
-# Forever Addons task runner. Requires the Rust toolchain (see
-# rust-toolchain.toml), Node 20+, and `cargo install tauri-cli` for `dev`
-# and `build`.
+# Forever Addons task runner. The devenv shell (devenv.nix) provides the
+# whole toolchain; without it you need Rust (rust-toolchain.toml), Node 20+,
+# and `cargo install tauri-cli` for `dev` and `build`.
 
 # List available recipes.
 default:
@@ -10,6 +10,10 @@ default:
 # beforeDevCommand in src-tauri/tauri.conf.json.
 dev:
     cargo tauri dev
+
+# The same thing as a devenv process, with its own log pane.
+up:
+    devenv up
 
 # UI alone on http://127.0.0.1:6273, against the mock backend — no Rust, no
 # client, no network. This is where the interface gets built.

@@ -22,6 +22,8 @@ user-tracked repositories.
 - The gate for "done" is `just check`: `cargo fmt --check`,
   `cargo clippy -D warnings`, `cargo test`, `npm --prefix ui run build`.
 
+@.claude/instructions/rust.md
+
 ## Dev
 
 - `just dev` runs the full app; `just ui` runs the UI alone against the mock

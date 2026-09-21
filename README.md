@@ -29,7 +29,10 @@ failing to load.
 
 ## Building
 
-Requirements: Rust (see `rust-toolchain.toml`), Node 20+, and the
+With [devenv](https://devenv.sh) and direnv, `direnv allow` gives you the
+whole toolchain (Rust, just, Node, the Tauri native deps, and the WebKitGTK
+environment fixes) — or bring your own: Rust (see `rust-toolchain.toml`),
+Node 20+, `just`, and the
 [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your OS.
 
 ```sh
