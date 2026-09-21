@@ -1,0 +1,53 @@
+[package]
+name = "forever-addons"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Addon manager for World of Warcraft: Forever"
+publish = false
+
+[lib]
+name = "forever_addons_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "json",
+    "gzip",
+    "stream",
+] }
+tokio = { version = "1", features = ["fs", "macros", "rt-multi-thread", "sync"] }
+futures-util = "0.3"
+
+scraper = "0.23"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tempfile = "3"
+
+thiserror = "2"
+time = { version = "0.3", features = ["serde-well-known", "parsing", "formatting"] }
+dirs = "6"
+percent-encoding = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
+
+[profile.dev]
+incremental = true
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

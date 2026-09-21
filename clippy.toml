@@ -1,0 +1,8 @@
+avoid-breaking-exported-api = false
+
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-unwrap-in-tests = true
+
+too-many-lines-threshold = 80
+excessive-nesting-threshold = 3
