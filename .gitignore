@@ -1,0 +1,14 @@
+# Rust
+/src-tauri/target
+/src-tauri/gen
+
+# UI
+node_modules
+/ui/dist
+/ui/tsconfig.tsbuildinfo
+vite.config.ts.timestamp-*
+
+# Local secrets
+.env
+.env.*
+!.env.example
