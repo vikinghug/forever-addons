@@ -6,6 +6,8 @@ interface Props {
   installed: InstalledView;
   busy: Record<string, string>;
   onUpdate: (addon: ManagedAddon) => void;
+  /** Reinstalls from a downloaded zip, for an addon the source serves only on its site. */
+  onInstallFile: (addon: ManagedAddon) => void;
   onRemove: (addon: ManagedAddon) => void;
   onOpen: (url: string) => void;
   onGoToBrowse: () => void;
@@ -15,6 +17,7 @@ export function Installed({
   installed,
   busy,
   onUpdate,
+  onInstallFile,
   onRemove,
   onOpen,
   onGoToBrowse,
@@ -46,7 +49,7 @@ export function Installed({
                 key={addonKey(addon.id)}
                 addon={addon}
                 busy={busy[addonKey(addon.id)] ?? null}
-                onUpdate={() => onUpdate(addon)}
+                onUpdate={() => (addon.site_download_only ? onInstallFile(addon) : onUpdate(addon))}
                 onRemove={() => onRemove(addon)}
                 onOpen={() => onOpen(addon.page_url)}
               />
@@ -144,8 +147,18 @@ function ManagedRow({
         )}
         {addon.present && !outdated && <span className="tag" data-tone="moss">Current</span>}
 
-        <button type="button" className="btn" data-variant="quiet" onClick={onOpen}>
-          Page
+        <button
+          type="button"
+          className="btn"
+          data-variant={addon.site_download_only && outdated ? undefined : "quiet"}
+          onClick={onOpen}
+          title={
+            addon.site_download_only
+              ? "The author allows downloads only on this page; download the new zip there"
+              : undefined
+          }
+        >
+          {addon.site_download_only && outdated ? "Download page" : "Page"}
         </button>
         <button
           type="button"
@@ -162,8 +175,14 @@ function ManagedRow({
           data-variant={outdated || !addon.present ? "primary" : undefined}
           disabled={busy !== null}
           onClick={onUpdate}
+          title={
+            addon.site_download_only
+              ? "Pick the zip you downloaded from the addon's page"
+              : undefined
+          }
         >
-          {busy ?? (outdated ? "Update" : addon.present ? "Reinstall" : "Restore")}
+          {busy ??
+            `${outdated ? "Update" : addon.present ? "Reinstall" : "Restore"}${addon.site_download_only ? " from zip…" : ""}`}
         </button>
       </span>
     </div>

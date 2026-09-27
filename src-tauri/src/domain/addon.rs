@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::domain::{AddonVersion, Expansion, SourceId};
+use crate::domain::{AddonVersion, Expansion, SafeHtml, SourceId};
 
 /// A source-local identifier, opaque to everything but the source that minted
 /// it: a mod id on CurseForge, an addon id on Wago, `owner/name` on GitHub.
@@ -69,32 +69,6 @@ pub enum Download {
     External { url: String },
 }
 
-/// An addon's long description in the markup its source publishes. The UI
-/// sanitizes and renders it; nothing here interprets the markup.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "format", content = "text", rename_all = "kebab-case")]
-pub enum Description {
-    Html(String),
-    Markdown(String),
-    Plain(String),
-}
-
-impl Description {
-    /// `markup` wrapped by `wrap`, or the plain `fallback` when it is blank.
-    pub fn or_plain(markup: Option<&str>, wrap: fn(String) -> Self, fallback: &str) -> Self {
-        match markup.map(str::trim).filter(|markup| !markup.is_empty()) {
-            Some(markup) => wrap(markup.to_owned()),
-            None => Self::Plain(fallback.to_owned()),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        match self {
-            Self::Html(text) | Self::Markdown(text) | Self::Plain(text) => text.trim().is_empty(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Screenshot {
     pub url: String,
@@ -152,7 +126,7 @@ impl AddonSummary {
 pub struct AddonDetail {
     #[serde(flatten)]
     pub summary: AddonSummary,
-    pub description: Description,
+    pub description: SafeHtml,
     pub website_url: Option<String>,
     pub screenshots: Vec<Screenshot>,
 }
@@ -211,23 +185,5 @@ mod tests {
         };
 
         assert!(!addon.is_installable());
-    }
-
-    #[test]
-    fn a_blank_description_falls_back_to_the_plain_summary() {
-        for markup in [None, Some(""), Some("  \n ")] {
-            assert_eq!(
-                Description::or_plain(markup, Description::Html, "A quest helper."),
-                Description::Plain("A quest helper.".to_owned())
-            );
-        }
-    }
-
-    #[test]
-    fn description_markup_is_kept_in_its_source_format() {
-        assert_eq!(
-            Description::or_plain(Some(" ## Changes "), Description::Markdown, "unused"),
-            Description::Markdown("## Changes".to_owned())
-        );
     }
 }

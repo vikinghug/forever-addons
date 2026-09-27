@@ -47,7 +47,7 @@ pub enum AppError {
     NoForeverDownload { addon_id: AddonId },
 
     #[error(
-        "{addon_id}'s author distributes downloads only through the source's website; open the addon's page to download it"
+        "{addon_id}'s author allows downloads only on the source's website; download the zip from the addon's page, then choose Install downloaded zip"
     )]
     ExternalDownloadOnly { addon_id: AddonId },
 

@@ -15,6 +15,8 @@ interface Props {
   onClose: () => void;
   onOpen: (url: string) => void;
   onInstall: () => void;
+  /** Installs from a zip the user downloaded, for a site-only addon. */
+  onInstallFile: () => void;
   onRemove: () => void;
 }
 
@@ -28,6 +30,7 @@ export function DetailPane({
   onClose,
   onOpen,
   onInstall,
+  onInstallFile,
   onRemove,
 }: Props) {
   if (!addon) {
@@ -59,6 +62,7 @@ export function DetailPane({
           busy={busy}
           canInstall={canInstall}
           onInstall={onInstall}
+          onInstallFile={onInstallFile}
           onRemove={onRemove}
         />
         <button type="button" className="btn" data-variant="quiet" onClick={onClose} aria-label="Close details">
@@ -68,6 +72,13 @@ export function DetailPane({
 
       <div className="detail-body">
         <div className="detail-main">
+          <DownloadNotice
+            addon={shown}
+            busy={busy}
+            canInstall={canInstall}
+            onOpen={onOpen}
+            onInstallFile={onInstallFile}
+          />
           {error && (
             <p className="prose">
               <span className="tag" data-tone="rust">Could not load</span> {error}
@@ -75,12 +86,7 @@ export function DetailPane({
           )}
           {!detail && !error && <p className="prose">{addon.summary || "Loading…"}</p>}
           {detail && (
-            <DescriptionView
-              description={detail.description}
-              pageUrl={detail.page_url}
-              title={detail.name}
-              onOpen={onOpen}
-            />
+            <DescriptionView html={detail.description} onOpen={onOpen} />
           )}
 
           {detail && detail.screenshots.length > 0 && (
@@ -119,6 +125,7 @@ function Actions({
   busy,
   canInstall,
   onInstall,
+  onInstallFile,
   onRemove,
 }: {
   addon: AddonSummary;
@@ -126,10 +133,12 @@ function Actions({
   busy: string | null;
   canInstall: boolean;
   onInstall: () => void;
+  onInstallFile: () => void;
   onRemove: () => void;
 }) {
   const installed = state === "installed" || state === "outdated";
   const installable = isInstallable(addon);
+  const siteOnly = addon.download.kind === "external";
 
   return (
     <div className="row-actions">
@@ -148,20 +157,93 @@ function Actions({
         type="button"
         className="btn"
         data-variant="primary"
-        disabled={busy !== null || !canInstall || !installable}
-        onClick={onInstall}
+        disabled={busy !== null || !canInstall || !(installable || siteOnly)}
+        onClick={siteOnly ? onInstallFile : onInstall}
         title={
-          installable
-            ? canInstall
-              ? undefined
-              : "Choose your World of Warcraft folder first"
-            : "Download it from the source's page instead"
+          !canInstall
+            ? "Choose your World of Warcraft folder first"
+            : siteOnly
+              ? "Pick the zip you downloaded from the addon's page"
+              : installable
+                ? undefined
+                : "This app cannot open the archive; see the note below"
         }
       >
-        {busy ?? (state === "outdated" ? "Update" : installed ? "Reinstall" : "Install")}
+        {busy ?? `${state === "outdated" ? "Update" : installed ? "Reinstall" : "Install"}${siteOnly ? " from zip…" : ""}`}
       </button>
     </div>
   );
+}
+
+/** Why this app cannot fetch the archive itself, and what to do instead. */
+function DownloadNotice({
+  addon,
+  busy,
+  canInstall,
+  onOpen,
+  onInstallFile,
+}: {
+  addon: AddonSummary;
+  busy: string | null;
+  canInstall: boolean;
+  onOpen: (url: string) => void;
+  onInstallFile: () => void;
+}) {
+  const source = SOURCE_NAMES[addon.id.source];
+
+  switch (addon.download.kind) {
+    case "direct":
+    case "brokered":
+      return null;
+
+    case "external": {
+      const { url } = addon.download;
+      return (
+        <div className="notice" role="note">
+          <h3 className="notice-title">Download this one from {source}</h3>
+          <p>
+            The author of {addon.name} has turned off downloads through third-party apps, so{" "}
+            {source} won't send the file to Forever Addons. Download the zip from the addon's
+            page, then pick it here. It installs and shows under Installed like any other addon,
+            and updates are still flagged when the author publishes a new file.
+          </p>
+          <div className="notice-actions">
+            <button type="button" className="btn" onClick={() => onOpen(url)}>
+              1 · Open download page
+            </button>
+            <button
+              type="button"
+              className="btn"
+              data-variant="primary"
+              disabled={busy !== null || !canInstall}
+              onClick={onInstallFile}
+            >
+              2 · Install downloaded zip…
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    case "unsupported": {
+      const { url, format } = addon.download;
+      return (
+        <div className="notice" role="note">
+          <h3 className="notice-title">Published as a .{format} archive</h3>
+          <p>
+            Forever Addons can only unpack .zip files. Download {addon.name} from its page and
+            unpack it into Interface/AddOns yourself; it will then show under Installed as an
+            addon installed by hand.
+          </p>
+          <div className="notice-actions">
+            <button type="button" className="btn" onClick={() => onOpen(url)}>
+              Open download page
+            </button>
+          </div>
+        </div>
+      );
+    }
+  }
 }
 
 function Facts({ addon }: { addon: AddonSummary }) {
@@ -186,7 +268,7 @@ function Facts({ addon }: { addon: AddonSummary }) {
       {addon.download.kind === "external" && (
         <>
           <dt>Download</dt>
-          <dd>only through the source's website, by the author's choice</dd>
+          <dd>from the addon's page only — the author turned off app downloads</dd>
         </>
       )}
 

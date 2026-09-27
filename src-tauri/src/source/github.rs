@@ -12,7 +12,7 @@
 //! archive, whose root folder is named after the commit and would never load.
 
 use crate::domain::{
-    AddonDetail, AddonSummary, Description, Download, Expansion, Screenshot, SourceId,
+    AddonDetail, AddonSummary, Download, Expansion, Markup, Screenshot, SourceId, keep_link,
 };
 use crate::error::{AppError, Result};
 use crate::source::http::HttpClient;
@@ -129,11 +129,11 @@ pub(super) async fn fetch_detail(http: &HttpClient, summary: &AddonSummary) -> R
 
     let releases = fetch_releases(http, &slug).await?;
     let release = best_release(&releases);
-    let description = Description::or_plain(
-        release.and_then(|release| release.body.as_deref()),
-        Description::Markdown,
-        &summary.summary,
-    );
+    let markup = Markup::new(summary, keep_link);
+    let description = match release.and_then(|release| release.body.as_deref()) {
+        Some(notes) => markup.markdown(notes),
+        None => markup.plain(),
+    };
 
     Ok(AddonDetail {
         description,

@@ -1,7 +1,7 @@
 //! Projections the UI renders: what is installed, where it came from, and
 //! whether the source has something newer.
 
-use crate::domain::{AddonSummary, AddonVersion};
+use crate::domain::{AddonSummary, AddonVersion, Download};
 use crate::install::manifest::{InstalledRecord, Manifest};
 use crate::wow::InstalledFolder;
 
@@ -39,6 +39,9 @@ pub struct ManagedAddon {
     /// False once a user has deleted the folders by hand.
     pub present: bool,
     pub update: UpdateStatus,
+    /// True when the source will not serve the archive to this application,
+    /// so an update means downloading the zip from the addon's page.
+    pub site_download_only: bool,
 }
 
 /// The installed tab: managed addons, plus whatever else is in the directory.
@@ -94,6 +97,8 @@ fn managed_addon(
             published.and_then(|addon| addon.version.as_ref()),
             published.and_then(|addon| addon.updated_at.as_deref()),
         ),
+        site_download_only: published
+            .is_some_and(|addon| matches!(addon.download, Download::External { .. })),
         present: !folders.is_empty(),
         folders,
         record: record.clone(),
@@ -189,6 +194,20 @@ mod tests {
             expansions: Vec::new(),
             download: Download::Brokered,
         }]
+    }
+
+    #[test]
+    fn flags_an_addon_whose_source_serves_it_only_on_its_site() {
+        let mut published = catalog("4857", None);
+        published[0].download = Download::External {
+            url: "https://www.curseforge.com/wow/addons/voiceover-forever".to_owned(),
+        };
+        let mut manifest = Manifest::default();
+        manifest.insert(record("4857", None, &["AI_VoiceOver"]));
+
+        let view = build(scanned(&["AI_VoiceOver"]), &manifest, &published);
+
+        assert!(view.managed[0].site_download_only);
     }
 
     #[test]

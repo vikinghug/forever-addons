@@ -64,6 +64,9 @@ export const api = {
   installAddon: (id: AddonId): Promise<InstalledView> =>
     isDesktop ? call("install_addon", { id }) : mock.installAddon(id),
 
+  installAddonFile: (id: AddonId, path: string): Promise<InstalledView> =>
+    isDesktop ? call("install_addon_file", { id, path }) : mock.installAddonFile(id, path),
+
   uninstallAddon: (id: AddonId): Promise<InstalledView> =>
     isDesktop ? call("uninstall_addon", { id }) : mock.uninstallAddon(id),
 
@@ -88,6 +91,27 @@ export async function chooseFolder(current: string | null): Promise<string | nul
     multiple: false,
     title: "Select your WoW Forever folder",
     defaultPath: current ?? undefined,
+  });
+
+  return typeof chosen === "string" ? chosen : null;
+}
+
+/** Opens the native file picker for a downloaded addon zip, starting in the
+ * Downloads folder, or asks for a typed path in the browser. */
+export async function chooseArchive(addonName: string): Promise<string | null> {
+  if (!isDesktop) {
+    return window.prompt(`Path to the ${addonName} zip you downloaded`, "") || null;
+  }
+
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const { downloadDir } = await import("@tauri-apps/api/path");
+  const downloads = await downloadDir().catch(() => undefined);
+  const chosen = await open({
+    directory: false,
+    multiple: false,
+    title: `Select the ${addonName} zip you downloaded`,
+    defaultPath: downloads,
+    filters: [{ name: "Zip archive", extensions: ["zip"] }],
   });
 
   return typeof chosen === "string" ? chosen : null;

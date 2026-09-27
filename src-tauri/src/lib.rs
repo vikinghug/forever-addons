@@ -48,6 +48,7 @@ pub fn run() {
             commands::get_addon_detail,
             commands::list_installed,
             commands::install_addon,
+            commands::install_addon_file,
             commands::uninstall_addon,
             commands::open_url,
         ])

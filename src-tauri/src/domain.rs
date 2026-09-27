@@ -2,13 +2,15 @@
 //! addon shapes that sources produce and the installer consumes.
 
 pub mod addon;
+pub mod description;
 pub mod expansion;
 pub mod folder;
 pub mod sort;
 pub mod source_id;
 pub mod version;
 
-pub use addon::{AddonDetail, AddonId, AddonKey, AddonSummary, Description, Download, Screenshot};
+pub use addon::{AddonDetail, AddonId, AddonKey, AddonSummary, Download, Screenshot};
+pub use description::{Markup, SafeHtml, keep_link};
 pub use expansion::Expansion;
 pub use folder::{AddonFolder, FolderNameError};
 pub use sort::{Sort, SortDirection, SortField};

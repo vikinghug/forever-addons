@@ -1,5 +1,5 @@
 import type { AddonSummary, SortField } from "../types";
-import { SOURCE_NAMES, isInstallable } from "../types";
+import { SOURCE_NAMES } from "../types";
 import { ago, count, initials } from "../format";
 
 /** What the left stripe on a row encodes. */
@@ -115,6 +115,35 @@ function RowTag({
     case "broken":
       return <span className="tag" data-tone="rust">Folders missing</span>;
     case "none":
-      return isInstallable(addon) ? null : <span className="tag" data-tone="mute">Can't install</span>;
+      return <DownloadTag addon={addon} />;
+  }
+}
+
+/** Flags, before the row is opened, an addon this app cannot fetch itself. */
+function DownloadTag({ addon }: { addon: AddonSummary }) {
+  switch (addon.download.kind) {
+    case "direct":
+    case "brokered":
+      return null;
+    case "external":
+      return (
+        <span
+          className="tag"
+          data-tone="gold"
+          title="The author turned off downloads through apps. Download the zip from the addon's page, then install it from the details pane."
+        >
+          Download on site
+        </span>
+      );
+    case "unsupported":
+      return (
+        <span
+          className="tag"
+          data-tone="mute"
+          title={`Published as a .${addon.download.format} archive, which this app cannot unpack.`}
+        >
+          .{addon.download.format} only
+        </span>
+      );
   }
 }

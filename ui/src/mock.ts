@@ -12,7 +12,6 @@ import type {
   AddonSummary,
   AppStatus,
   CatalogQuery,
-  Description,
   InstalledView,
   ManagedAddon,
   SearchResults,
@@ -93,31 +92,22 @@ const CATALOG: AddonSummary[] = [
     [], 1_040, "v1.4.0", "2026-09-18T12:00:00Z"),
 ];
 
-const DESCRIPTIONS: Record<string, Description> = {
-  "curseforge:1032100": {
-    format: "html",
-    text: `<h1>Questie Forever</h1>
-<p>&nbsp;</p>
-<p>Questie Forever tracks quest <strong>objectives</strong>, <em>availability</em>, and turn-ins
+/** As the backend sends them: sanitized, links absolute, title and spacers dropped. */
+const DESCRIPTIONS: Record<string, string> = {
+  "curseforge:1032100": `<p>Questie Forever tracks quest <strong>objectives</strong>, <em>availability</em>, and turn-ins
 on the world map and minimap, using Forever's own quest database.</p>
 <h2>Download</h2>
-<p>We suggest the <a href="/linkout?remoteUrl=https%253a%252f%252fcurseforge.overwolf.com%252f">CurseForge Client</a>,
+<p>We suggest the <a href="https://curseforge.overwolf.com/">CurseForge Client</a>,
 or the <a href="https://github.com/Questie/Questie/releases/latest">latest GitHub release</a>.</p>
 <h2>Information</h2>
 <ul>
-<li><a href="/wow/addons/questie/pages/faq">Frequently Asked Questions</a></li>
+<li><a href="https://www.curseforge.com/wow/addons/questie/pages/faq">Frequently Asked Questions</a></li>
 <li>Type <code>/questie</code> to open the options.</li>
-<li><span style="color:#808080;font-size:18px">Inline styles are stripped.</span></li>
-</ul>
-<script>alert("never runs")</script>`,
-  },
-  "wago:qN5mGYzr": {
-    format: "plain",
-    text:
-      "ForeverAuras displays buffs, debuffs, cooldowns, and any other condition " +
-      "you can express, as icons, bars, or text anywhere on screen — within " +
-      "Forever's addon restrictions.",
-  },
+</ul>`,
+  "wago:qN5mGYzr":
+    "<p>ForeverAuras displays buffs, debuffs, cooldowns, and any other condition " +
+    "you can express, as icons, bars, or text anywhere on screen — within " +
+    "Forever's addon restrictions.</p>",
 };
 
 let status: AppStatus = {
@@ -172,6 +162,7 @@ function managed(
     installed_at: "2026-09-18T19:41:00Z",
     present: true,
     update,
+    site_download_only: source.download.kind === "external",
     folders: folders.map((folder) => ({
       folder,
       title: folder,
@@ -352,10 +343,16 @@ export function getAddonDetail(id: AddonId): Promise<AddonDetail> {
   return delay(
     {
       ...found,
-      description: DESCRIPTIONS[addonKey(id)] ?? {
-        format: "markdown",
-        text: `## Changes\n\n- Fixed the \`/guide\` command\n- Added **Forever** support\n\n> ${found.summary}`,
-      },
+      description:
+        DESCRIPTIONS[addonKey(id)] ??
+        `<h2>Changes</h2>
+<ul>
+<li>Fixed the <code>/guide</code> command</li>
+<li>Added <strong>Forever</strong> support</li>
+</ul>
+<blockquote>
+<p>${found.summary}</p>
+</blockquote>`,
       website_url: "https://github.com/",
       screenshots: [],
     },
@@ -386,6 +383,27 @@ export function installAddon(id: AddonId): Promise<InstalledView> {
   };
 
   return delay(installed, 800);
+}
+
+export function installAddonFile(id: AddonId, path: string): Promise<InstalledView> {
+  const found = CATALOG.find((addon) => addonKey(addon.id) === addonKey(id));
+  if (!found) return Promise.reject(`${addonKey(id)} is not in the catalog.`);
+  if (!path.endsWith(".zip")) {
+    return Promise.reject(`the archive for ${addonKey(id)} is not a readable zip: ${path}`);
+  }
+
+  emit("install:progress", { addon_id: id, stage: "extracting" });
+
+  const folder = found.name.replace(/\W+/g, "");
+  installed = {
+    ...installed,
+    managed: [
+      ...installed.managed.filter((entry) => addonKey(entry.id) !== addonKey(id)),
+      managed(found, [folder], found.version ?? "1.0.0", { status: "up-to-date" }),
+    ],
+  };
+
+  return delay(installed, 400);
 }
 
 export function uninstallAddon(id: AddonId) {

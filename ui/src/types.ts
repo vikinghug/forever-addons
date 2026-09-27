@@ -15,7 +15,8 @@ export type Download =
   | { kind: "brokered" }
   /** An archive format this build cannot open. */
   | { kind: "unsupported"; url: string; format: string }
-  /** The author distributes only through the source's website. */
+  /** The author allows downloads only on the source's website; the user
+   * downloads the zip there and installs it with `install_addon_file`. */
   | { kind: "external"; url: string };
 
 export interface AddonSummary {
@@ -34,14 +35,9 @@ export interface AddonSummary {
   download: Download;
 }
 
-/** In the markup the source publishes; rendered by `DescriptionView`. */
-export type Description =
-  | { format: "html"; text: string }
-  | { format: "markdown"; text: string }
-  | { format: "plain"; text: string };
-
 export interface AddonDetail extends AddonSummary {
-  description: Description;
+  /** Sanitized HTML (`SafeHtml`); the summary as a paragraph when the source has none. */
+  description: string;
   website_url: string | null;
   screenshots: { url: string }[];
 }
@@ -72,6 +68,9 @@ export interface ManagedAddon {
   installed_at: string;
   present: boolean;
   update: UpdateStatus;
+  /** The source will not serve the archive to this app; updates come from a
+   * zip the user downloads from the addon's page. */
+  site_download_only: boolean;
 }
 
 export interface InstalledView {

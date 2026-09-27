@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 
 use crate::domain::{
-    AddonDetail, AddonSummary, Description, Download, Expansion, Screenshot, SourceId,
+    AddonDetail, AddonSummary, Download, Expansion, Markup, Screenshot, SourceId, keep_link,
 };
 use crate::error::{AppError, Result};
 use crate::source::http::HttpClient;
@@ -120,11 +120,7 @@ pub(super) async fn fetch_detail(
     let document = fetch_document(http, token, summary).await?;
 
     Ok(AddonDetail {
-        description: Description::or_plain(
-            Some(&document.description),
-            Description::Html,
-            &summary.summary,
-        ),
+        description: Markup::new(summary, keep_link).html(&document.description),
         website_url: non_empty(&document.website),
         screenshots: document
             .gallery

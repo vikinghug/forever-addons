@@ -39,6 +39,11 @@ time = { version = "0.3", features = ["serde-well-known", "parsing", "formatting
 dirs = "6"
 percent-encoding = "2"
 
+# Descriptions are third-party HTML and Markdown, sanitized before the UI sees them.
+ammonia = "4"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+url = "2"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }
 

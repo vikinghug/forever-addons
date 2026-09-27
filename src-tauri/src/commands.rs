@@ -8,8 +8,11 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::catalog::{self, Catalog, CatalogQuery, SearchResults};
-use crate::domain::{AddonDetail, AddonId, AddonKey, AddonSummary, Listing, LiveSource, SourceId};
+use crate::domain::{
+    AddonDetail, AddonFolder, AddonId, AddonKey, AddonSummary, Listing, LiveSource, SourceId,
+};
 use crate::error::{AppError, Result};
+use crate::install::manifest::InstalledRecord;
 use crate::install::{self, InstallProgress};
 use crate::source::{SearchAccess, SourceNotice};
 use crate::state::AppState;
@@ -335,16 +338,8 @@ pub async fn install_addon(
 ) -> Result<InstalledView> {
     let install = state.wow_install().await?;
     let auth = state.source_auth().await;
-    let summary = match id.source.listing() {
-        Listing::Catalog(_) => find_in_catalog(&state, &id).await?,
-        Listing::Live(source) => state.sources().lookup_live(source, &id.key, &auth).await?,
-    };
-    let previously_installed = state
-        .manifest()
-        .await
-        .get(&id)
-        .map(|record| record.folders.clone())
-        .unwrap_or_default();
+    let summary = current_summary(&state, &auth, &id).await?;
+    let previously_installed = recorded_folders(&state, &id).await;
 
     let record = install::install_addon(
         state.sources(),
@@ -358,6 +353,63 @@ pub async fn install_addon(
     )
     .await?;
 
+    save_record(state, record).await
+}
+
+/// Installs one addon from a zip the user downloaded from its page — the
+/// route for an author who allows downloads only on the source's website.
+#[tauri::command]
+pub async fn install_addon_file(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: AddonId,
+    path: PathBuf,
+) -> Result<InstalledView> {
+    let install = state.wow_install().await?;
+    let auth = state.source_auth().await;
+    let summary = current_summary(&state, &auth, &id).await?;
+    let previously_installed = recorded_folders(&state, &id).await;
+
+    let record = install::install_from_file(
+        &install,
+        &summary,
+        path,
+        previously_installed,
+        &move |progress: InstallProgress| {
+            let _ = app.emit(INSTALL_PROGRESS_EVENT, progress);
+        },
+    )
+    .await?;
+
+    save_record(state, record).await
+}
+
+/// The addon as its source publishes it now: the cached catalog row, or a
+/// fresh live lookup.
+async fn current_summary(
+    state: &State<'_, AppState>,
+    auth: &crate::source::SourceAuth,
+    id: &AddonId,
+) -> Result<AddonSummary> {
+    match id.source.listing() {
+        Listing::Catalog(_) => find_in_catalog(state, id).await,
+        Listing::Live(source) => state.sources().lookup_live(source, &id.key, auth).await,
+    }
+}
+
+/// What the manifest recorded for this addon last time, so an upgrade can
+/// clear folders the new archive no longer ships.
+async fn recorded_folders(state: &State<'_, AppState>, id: &AddonId) -> Vec<AddonFolder> {
+    state
+        .manifest()
+        .await
+        .get(id)
+        .map(|record| record.folders.clone())
+        .unwrap_or_default()
+}
+
+/// Persists a finished install, then re-reads the installed view.
+async fn save_record(state: State<'_, AppState>, record: InstalledRecord) -> Result<InstalledView> {
     state
         .update_manifest(move |manifest| {
             manifest.insert(record);

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   api,
+  chooseArchive,
   chooseFolder,
   messageOf,
   onCatalogProgress,
@@ -189,6 +190,11 @@ export default function App() {
   };
 
   const install = (id: AddonId) => withBusy(id, "Installing…", () => api.installAddon(id));
+  const installFile = async (id: AddonId, name: string) => {
+    const path = await chooseArchive(name);
+    if (!path) return;
+    await withBusy(id, "Installing…", () => api.installAddonFile(id, path));
+  };
   const remove = (id: AddonId) => withBusy(id, "Removing…", () => api.uninstallAddon(id));
 
   const pickFolder = async () => {
@@ -340,6 +346,7 @@ export default function App() {
             onClose={() => setSelected(null)}
             onOpen={openUrl}
             onInstall={() => selected && install(selected.id)}
+            onInstallFile={() => selected && installFile(selected.id, selected.name)}
             onRemove={() => selected && remove(selected.id)}
           />
         </main>
@@ -351,6 +358,7 @@ export default function App() {
             installed={installed}
             busy={busy}
             onUpdate={(addon) => install(addon.id)}
+            onInstallFile={(addon) => installFile(addon.id, addon.name)}
             onRemove={(addon) => remove(addon.id)}
             onOpen={openUrl}
             onGoToBrowse={() => navigate("browse")}

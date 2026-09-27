@@ -15,11 +15,14 @@
 //! Mod authors can opt out of API distribution; those mods stay browsable as
 //! [`Download::External`] with their page reachable, rather than vanishing.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 
+use percent_encoding::percent_decode_str;
+
 use crate::domain::{
-    AddonDetail, AddonId, AddonKey, AddonSummary, Description, Download, Expansion, Screenshot,
-    Sort, SortDirection, SortField, SourceId,
+    AddonDetail, AddonId, AddonKey, AddonSummary, Download, Expansion, Markup, Screenshot, Sort,
+    SortDirection, SortField, SourceId,
 };
 use crate::error::{AppError, Result};
 use crate::source::http::HttpClient;
@@ -405,11 +408,7 @@ pub(super) async fn fetch_detail(
     })?;
 
     Ok(AddonDetail {
-        description: Description::or_plain(
-            Some(&description.data),
-            Description::Html,
-            &summary.summary,
-        ),
+        description: Markup::new(&summary, unwrap_linkout).html(&description.data),
         website_url: found.links.source_url.as_deref().and_then(non_empty),
         screenshots: found
             .screenshots
@@ -447,7 +446,13 @@ pub(super) async fn resolve_archive_url(
     }
 
     let found = fetch_mod(http, api_key, &summary.id.key).await?;
-    match classify(&found) {
+    let Some(index) = forever_index(&found) else {
+        return Err(AppError::NoForeverDownload {
+            addon_id: summary.id.clone(),
+        });
+    };
+
+    match classify(&found, index) {
         Download::Direct { url } => Ok(url),
         Download::External { .. } => Err(AppError::ExternalDownloadOnly {
             addon_id: summary.id.clone(),
@@ -459,12 +464,6 @@ pub(super) async fn resolve_archive_url(
         // The index names a file that `latestFiles` no longer carries; the
         // download-url endpoint can still mint a link for it.
         Download::Brokered => {
-            let Some(index) = forever_index(&found) else {
-                return Err(AppError::NoForeverDownload {
-                    addon_id: summary.id.clone(),
-                });
-            };
-
             let url = format!(
                 "{API}/mods/{}/files/{}/download-url",
                 summary.id.key, index.file_id
@@ -591,7 +590,7 @@ fn to_summary(found: &Mod) -> Option<AddonSummary> {
             .collect(),
         downloads: Some(found.download_count),
         expansions: vec![Expansion::Forever],
-        download: classify(found),
+        download: classify(found, index),
         id,
     })
 }
@@ -614,18 +613,15 @@ fn forever_index(found: &Mod) -> Option<&FileIndex> {
         .or(Some(first))
 }
 
-fn classify(found: &Mod) -> Download {
+/// How the Forever file named by `index` can be fetched. A mod with no
+/// Forever file never gets this far — it is no Forever addon at all — so
+/// [`Download::External`] only ever means the author's opt-out.
+fn classify(found: &Mod, index: &FileIndex) -> Download {
     if found.allow_mod_distribution == Some(false) {
         return Download::External {
             url: page_url(found),
         };
     }
-
-    let Some(index) = forever_index(found) else {
-        return Download::External {
-            url: page_url(found),
-        };
-    };
 
     match found
         .latest_files
@@ -639,6 +635,26 @@ fn classify(found: &Mod) -> Download {
         },
         None => Download::Brokered,
     }
+}
+
+/// The target of a CurseForge outbound link. Descriptions wrap them as
+/// `/linkout?remoteUrl=…`, usually with the target percent-encoded twice.
+fn unwrap_linkout(href: &str) -> Cow<'_, str> {
+    let Some((_, query)) = href.split_once("/linkout?") else {
+        return Cow::Borrowed(href);
+    };
+    let Some(encoded) = query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("remoteUrl="))
+    else {
+        return Cow::Borrowed(href);
+    };
+
+    let once = percent_decode_str(encoded).decode_utf8_lossy();
+    if once.contains("://") {
+        return Cow::Owned(once.into_owned());
+    }
+    Cow::Owned(percent_decode_str(&once).decode_utf8_lossy().into_owned())
 }
 
 fn page_url(found: &Mod) -> String {
@@ -899,5 +915,38 @@ mod tests {
             let url = search_url(&SearchTerm::Everything, sort).expect("url builds");
             assert!(url.contains(expected), "{field:?} {direction:?}: {url}");
         }
+    }
+
+    #[test]
+    fn unwraps_linkout_redirects_to_their_target() {
+        let cases = [
+            (
+                "/linkout?remoteUrl=https%253a%252f%252fcurseforge.overwolf.com%252f",
+                "https://curseforge.overwolf.com/",
+            ),
+            (
+                "https://www.curseforge.com/linkout?remoteUrl=https%3a%2f%2fdiscord.gg%2fquestie&x=1",
+                "https://discord.gg/questie",
+            ),
+            ("/wow/addons/questie", "/wow/addons/questie"),
+            ("/linkout?other=1", "/linkout?other=1"),
+        ];
+
+        for (href, expected) in cases {
+            assert_eq!(unwrap_linkout(href), expected, "href: {href}");
+        }
+    }
+
+    #[test]
+    fn a_description_linkout_opens_its_decoded_target() {
+        let found = questie();
+        let summary = to_summary(&found).expect("a Forever mod");
+        let html =
+            r#"<a href="/linkout?remoteUrl=https%253a%252f%252fgithub.com%252fQuestie">GitHub</a>"#;
+
+        assert_eq!(
+            Markup::new(&summary, unwrap_linkout).html(html).as_str(),
+            r#"<a href="https://github.com/Questie">GitHub</a>"#
+        );
     }
 }

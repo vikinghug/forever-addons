@@ -83,6 +83,40 @@ pub async fn install_addon(
     let addons_dir = install.ensure_addons_dir()?;
     let folders = apply_archive(bytes, summary.clone(), addons_dir, previously_installed).await?;
 
+    Ok(finish(summary, folders, on_progress))
+}
+
+/// Applies an archive the user downloaded themselves — the route for an addon
+/// whose author allows downloads only on the source's website.
+///
+/// The record is kept under the addon's own id, so the installed list still
+/// learns from the source when a newer file is published. The file is taken
+/// to be the addon's current release, since the page it came from offers
+/// that one first.
+pub async fn install_from_file(
+    install: &WowInstall,
+    summary: &AddonSummary,
+    archive: PathBuf,
+    previously_installed: Vec<AddonFolder>,
+    on_progress: &(dyn Fn(InstallProgress) + Send + Sync),
+) -> Result<InstalledRecord> {
+    report(on_progress, &summary.id, InstallStage::Extracting);
+    let bytes = tokio::fs::read(&archive)
+        .await
+        .map_err(|err| AppError::io("read the downloaded archive", &archive, &err))?;
+
+    let addons_dir = install.ensure_addons_dir()?;
+    let folders = apply_archive(bytes, summary.clone(), addons_dir, previously_installed).await?;
+
+    Ok(finish(summary, folders, on_progress))
+}
+
+/// Reports the install done and builds the record the caller persists.
+fn finish(
+    summary: &AddonSummary,
+    folders: Vec<AddonFolder>,
+    on_progress: &(dyn Fn(InstallProgress) + Send + Sync),
+) -> InstalledRecord {
     report(
         on_progress,
         &summary.id,
@@ -91,14 +125,14 @@ pub async fn install_addon(
         },
     );
 
-    Ok(InstalledRecord {
+    InstalledRecord {
         id: summary.id.clone(),
         name: summary.name.clone(),
         version: summary.version.clone(),
         folders,
         page_url: summary.page_url.clone(),
         installed_at: manifest::now_rfc3339(),
-    })
+    }
 }
 
 /// Removes the folders this application recorded for an addon.
@@ -427,6 +461,63 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    fn ignore_progress(_: InstallProgress) {}
+
+    fn client(root: &Path) -> WowInstall {
+        std::fs::write(root.join("WowB.exe"), b"MZ").expect("fixture executable");
+        std::fs::write(root.join(".flavor.info"), "wow_classic_beta\n").expect("fixture marker");
+        WowInstall::open(root).expect("fixture client opens")
+    }
+
+    #[tokio::test]
+    async fn installs_a_downloaded_zip_under_the_addons_own_id() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let install = client(temp.path());
+        let archive = temp.path().join("AI_VoiceOver-2.1.3.zip");
+        std::fs::write(
+            &archive,
+            zip_bytes(&[("AI_VoiceOver/AI_VoiceOver.toc", "## Interface: 16001\n")]),
+        )
+        .expect("fixture archive");
+
+        let summary = summary("VoiceOver Forever");
+        let record = install_from_file(&install, &summary, archive, Vec::new(), &ignore_progress)
+            .await
+            .expect("downloaded archive installs");
+
+        assert_eq!(record.id, summary.id);
+        assert_eq!(
+            record.folders,
+            vec![AddonFolder::new("AI_VoiceOver").expect("valid")]
+        );
+        assert!(
+            install
+                .addons_dir()
+                .join("AI_VoiceOver/AI_VoiceOver.toc")
+                .is_file()
+        );
+    }
+
+    #[tokio::test]
+    async fn names_the_downloaded_file_it_could_not_read() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let install = client(temp.path());
+        let missing = temp.path().join("gone.zip");
+
+        let error = install_from_file(
+            &install,
+            &summary("Bagnon"),
+            missing,
+            Vec::new(),
+            &ignore_progress,
+        )
+        .await
+        .expect_err("no such file");
+
+        assert!(matches!(error, AppError::Io { .. }), "{error}");
+        assert!(error.to_string().contains("gone.zip"), "{error}");
     }
 
     #[test]
