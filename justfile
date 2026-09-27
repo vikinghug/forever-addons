@@ -2,6 +2,12 @@
 # whole toolchain; without it you need Rust (rust-toolchain.toml), Node 20+,
 # and `cargo install tauri-cli` for `dev` and `build`.
 
+set dotenv-load := true
+set lazy
+
+# Personal, uncommitted recipes (gitignored; absent on a fresh clone).
+import? 'local.just'
+
 # List available recipes.
 default:
     @just --list

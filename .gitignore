@@ -20,3 +20,7 @@ devenv.local.yaml
 .env
 .env.*
 !.env.example
+
+# Personal, uncommitted tooling
+local.just
+/scripts/twitch-token.sh
