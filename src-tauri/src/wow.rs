@@ -95,33 +95,26 @@ fn invalid(root: &Path, reason: &str) -> AppError {
     }
 }
 
-/// The places the Forever client is commonly installed, checked in order so
-/// the first launch can offer a guess instead of an empty file picker.
+/// The places the Forever client is commonly installed on Linux, where
+/// Battle.net runs under Wine, checked in order so the first launch can
+/// offer a guess instead of an empty file picker.
 ///
 /// The list names `_classic_beta_`, the product directory the beta installs
 /// under; the release build may add a differently named sibling, in which case
 /// this list grows rather than changes.
 pub fn likely_install_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
 
-    if let Some(home) = dirs::home_dir() {
-        for relative in [
-            "Games/Battle.net/World of Warcraft/_classic_beta_",
-            "Games/World of Warcraft/_classic_beta_",
-            ".wine/drive_c/Program Files (x86)/World of Warcraft/_classic_beta_",
-        ] {
-            roots.push(home.join(relative));
-        }
-    }
-
-    for absolute in [
-        "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_",
-        "C:\\Program Files\\World of Warcraft\\_classic_beta_",
-    ] {
-        roots.push(PathBuf::from(absolute));
-    }
-
-    roots
+    [
+        "Games/Battle.net/World of Warcraft/_classic_beta_",
+        "Games/World of Warcraft/_classic_beta_",
+        ".wine/drive_c/Program Files (x86)/World of Warcraft/_classic_beta_",
+    ]
+    .into_iter()
+    .map(|relative| home.join(relative))
+    .collect()
 }
 
 /// The first likely root that actually validates, if any.

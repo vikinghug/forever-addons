@@ -3,7 +3,7 @@ name = "forever-addons"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Addon manager for World of Warcraft: Forever"
+description = "Personal Linux addon manager for World of Warcraft: Forever"
 publish = false
 
 [lib]

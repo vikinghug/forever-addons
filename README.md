@@ -1,7 +1,8 @@
 # Forever Addons
 
-A desktop addon manager for **World of Warcraft: Forever**. Browse, install,
-update, and cleanly uninstall addons against your local Forever client.
+My personal Linux desktop app for managing **World of Warcraft: Forever**
+addons. Browse, install, update, and cleanly uninstall addons against a local
+Forever client running under Wine.
 
 ## Sources
 
@@ -33,7 +34,7 @@ With [devenv](https://devenv.sh) and direnv, `direnv allow` gives you the
 whole toolchain (Rust, just, Node, the Tauri native deps, and the WebKitGTK
 environment fixes) — or bring your own: Rust (see `rust-toolchain.toml`),
 Node 20+, `just`, and the
-[Tauri prerequisites](https://tauri.app/start/prerequisites/) for your OS.
+[Tauri Linux prerequisites](https://tauri.app/start/prerequisites/#linux).
 
 ```sh
 just install   # npm install for the UI
