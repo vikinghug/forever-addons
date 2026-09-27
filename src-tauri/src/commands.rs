@@ -9,7 +9,8 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::catalog::{self, Catalog, CatalogQuery, SearchResults};
 use crate::domain::{
-    AddonDetail, AddonFolder, AddonId, AddonKey, AddonSummary, Listing, LiveSource, SourceId,
+    AddonDetail, AddonFolder, AddonId, AddonKey, AddonSummary, FileKey, FileListing, Listing,
+    LiveSource, SafeHtml, SourceId,
 };
 use crate::error::{AppError, Result};
 use crate::install::manifest::InstalledRecord;
@@ -281,6 +282,33 @@ pub async fn get_addon_detail(state: State<'_, AppState>, id: AddonId) -> Result
                 .await
         }
     }
+}
+
+/// Every file the source lists for an addon, with the installed one marked
+/// and the addons they depend on looked up.
+#[tauri::command]
+pub async fn get_addon_files(state: State<'_, AppState>, id: AddonId) -> Result<FileListing> {
+    let auth = state.source_auth().await;
+    let installed_at = state
+        .manifest()
+        .await
+        .get(&id)
+        .map(|record| record.installed_at.clone());
+
+    state
+        .sources()
+        .fetch_files(&id, installed_at.as_deref(), &auth)
+        .await
+}
+
+#[tauri::command]
+pub async fn get_file_changelog(
+    state: State<'_, AppState>,
+    id: AddonId,
+    file: FileKey,
+) -> Result<SafeHtml> {
+    let auth = state.source_auth().await;
+    state.sources().fetch_changelog(&id, &file, &auth).await
 }
 
 #[tauri::command]

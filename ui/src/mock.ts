@@ -12,6 +12,10 @@ import type {
   AddonSummary,
   AppStatus,
   CatalogQuery,
+  FileListing,
+  PublishedFile,
+  RelatedAddon,
+  Screenshot,
   InstalledView,
   ManagedAddon,
   SearchResults,
@@ -81,6 +85,16 @@ const CATALOG: AddonSummary[] = [
     "The damage meter, ported to Forever.",
     ["Combat"], 201_500, null, "2026-09-16T08:00:00Z",
     { kind: "external", url: "https://www.curseforge.com/wow/addons/details-forever" }),
+  // What Questie Forever's files depend on or conflict with.
+  addon("curseforge", "1030500", "Questie", "Aero",
+    "The original Classic quest helper.",
+    ["Quests & Leveling"], 410_220, null, "2026-09-12T10:00:00Z"),
+  addon("curseforge", "1030800", "HereBeDragons", "Nevcairiel",
+    "Map and coordinate library for addon authors.",
+    ["Libraries"], 22_310, null, "2026-09-02T10:00:00Z"),
+  addon("curseforge", "1030700", "TomTom", "Ludovicus",
+    "Waypoints and an arrow to follow them.",
+    ["Map & Minimap"], 95_870, null, "2026-09-14T10:00:00Z"),
   addon("wago", "qN5mGYzr", "ForeverAuras", "Stanzilla",
     "A WeakAuras replacement built for Forever's addon rules.",
     [], 48_211, "1.2.0", "2026-09-17T08:00:00Z"),
@@ -110,6 +124,91 @@ or the <a href="https://github.com/Questie/Questie/releases/latest">latest GitHu
     "Forever's addon restrictions.</p>",
 };
 
+/** A painted stand-in, so the gallery has something to show offline. */
+function shot(title: string, description: string, hue: number): Screenshot {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540">
+<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="hsl(${hue} 30% 26%)"/><stop offset="1" stop-color="hsl(${hue} 30% 8%)"/>
+</linearGradient></defs>
+<rect width="960" height="540" fill="url(#g)"/>
+<path d="M0 380 Q240 300 480 360 T960 330 V540 H0Z" fill="rgba(0,0,0,.35)"/>
+<rect x="600" y="70" width="300" height="220" fill="rgba(10,12,16,.82)" stroke="#8a7550" stroke-width="2"/>
+<text x="624" y="112" fill="#e8cb90" font-family="sans-serif" font-size="22">${title}</text>
+<text x="200" y="250" fill="#f2d24b" font-family="serif" font-size="44" font-weight="700">!</text>
+<text x="380" y="330" fill="#f2d24b" font-family="serif" font-size="44" font-weight="700">?</text>
+</svg>`;
+  const url = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+  return { url, thumbnail_url: null, title, description };
+}
+
+const SCREENSHOTS: Record<string, Screenshot[]> = {
+  "curseforge:1032100": [
+    shot("World map", "Available quests, objectives, and turn-ins, filtered by level.", 130),
+    shot("Tracker", "Progress counts update as you loot and kill.", 240),
+    shot("Tooltips", "Hover a mob or item to see which quest wants it.", 30),
+    shot("Minimap", "Nearby givers and objectives without opening the map.", 200),
+  ],
+};
+
+function file(
+  id: string,
+  name: string,
+  channel: PublishedFile["channel"]["kind"],
+  published_at: string,
+  dependencies: [string, PublishedFile["dependencies"][number]["relation"]["kind"]][] = [],
+): PublishedFile {
+  return {
+    id,
+    name,
+    file_name: `Questie-Forever-${name}.zip`,
+    channel: { kind: channel } as PublishedFile["channel"],
+    published_at,
+    size: 4_400_000,
+    downloads: 12_000,
+    folders: ["Questie"],
+    dependencies: dependencies.map(([key, relation]) => ({
+      addon: { source: "curseforge", key },
+      relation: { kind: relation } as PublishedFile["dependencies"][number]["relation"],
+    })),
+  };
+}
+
+const QUESTIE_DEPS_NOW: [string, PublishedFile["dependencies"][number]["relation"]["kind"]][] = [
+  ["1030500", "incompatible"],
+  ["1030800", "required"],
+  ["1030700", "optional"],
+  ["1030001", "embedded"],
+  ["1030002", "embedded"],
+];
+
+const QUESTIE_DEPS_BEFORE: [string, PublishedFile["dependencies"][number]["relation"]["kind"]][] = [
+  ["1030500", "incompatible"],
+  ["1030800", "embedded"],
+  ["1030700", "optional"],
+  ["1030001", "embedded"],
+];
+
+/** Questie Forever was installed on 18 Sep, so 1.4.2 is the installed file. */
+const FILES: Record<string, PublishedFile[]> = {
+  "curseforge:1032100": [
+    file("7010", "1.5.0-beta.2", "beta", "2026-09-24T10:00:00Z", QUESTIE_DEPS_NOW),
+    file("7009", "1.4.3", "release", "2026-09-22T10:00:00Z", QUESTIE_DEPS_NOW),
+    file("7008", "1.4.2", "release", "2026-09-09T10:00:00Z", QUESTIE_DEPS_BEFORE),
+    file("7007", "1.4.1", "release", "2026-08-30T10:00:00Z", QUESTIE_DEPS_BEFORE),
+    file("7006", "1.4.0-beta.1", "beta", "2026-08-14T10:00:00Z", QUESTIE_DEPS_BEFORE),
+    file("7005", "1.3.0-alpha.3", "alpha", "2026-07-11T10:00:00Z"),
+  ],
+};
+
+/** As the backend sends them: sanitized HTML. */
+const CHANGELOGS: Record<string, string> = {
+  "7010": "<ul><li>Revamped Westfall and Duskwood quest chains</li><li>Tracker can group by zone</li></ul>",
+  "7009":
+    "<ul><li>HereBeDragons is no longer bundled; install it separately</li>" +
+    "<li>Fixed turn-in pins for Forever's Redridge rework</li></ul>",
+  "7008": "<ul><li>Loot tooltips show quest item counts</li></ul>",
+};
+
 let status: AppStatus = {
   client_path: "/home/you/Games/Battle.net/World of Warcraft/_classic_beta_",
   install_valid: true,
@@ -135,7 +234,8 @@ let status: AppStatus = {
 let installed: InstalledView = {
   managed: [
     managed(CATALOG[0], ["Questie"], "10.0.1", { status: "available", latest: "10.1.0" }),
-    managed(CATALOG[5], ["ForeverAuras", "ForeverAurasOptions"], "1.2.0", {
+    managed(CATALOG[5], ["QuestieClassic"], "9.8.2", { status: "up-to-date" }),
+    managed(CATALOG[8], ["ForeverAuras", "ForeverAurasOptions"], "1.2.0", {
       status: "up-to-date",
     }),
   ],
@@ -354,10 +454,51 @@ export function getAddonDetail(id: AddonId): Promise<AddonDetail> {
 <p>${found.summary}</p>
 </blockquote>`,
       website_url: "https://github.com/",
-      screenshots: [],
+      screenshots: SCREENSHOTS[addonKey(id)] ?? [],
     },
     320,
   );
+}
+
+export function getAddonFiles(id: AddonId): Promise<FileListing> {
+  if (id.source !== "curseforge") return delay({ kind: "not-offered" });
+
+  const files = FILES[addonKey(id)] ?? [];
+  const record = installed.managed.find((entry) => addonKey(entry.id) === addonKey(id));
+  const preferred = (candidates: PublishedFile[]) =>
+    candidates.find((entry) => entry.channel.kind === "release") ?? candidates[0];
+  const installedFile = record
+    ? preferred(files.filter((entry) => entry.published_at <= record.installed_at))
+    : undefined;
+
+  return delay(
+    {
+      kind: "listed",
+      files,
+      target: preferred(files)?.id ?? null,
+      installed: installedFile?.id ?? null,
+      related: related(files),
+    },
+    260,
+  );
+}
+
+function related(files: PublishedFile[]): RelatedAddon[] {
+  const keys = [...new Set(files.flatMap((entry) => entry.dependencies.map((dep) => dep.addon.key)))];
+  return keys.map((key): RelatedAddon => {
+    const listed = CATALOG.find((addon) => addon.id.source === "curseforge" && addon.id.key === key);
+    if (listed) return { availability: "listed", ...listed };
+    const id = { source: "curseforge" as const, key };
+    if (key === "1030001") {
+      return { availability: "no-forever-file", id, name: "Ace3",
+        page_url: "https://www.curseforge.com/wow/addons/ace3" };
+    }
+    return { availability: "unlisted", id };
+  });
+}
+
+export function getFileChangelog(_id: AddonId, file: string): Promise<string> {
+  return delay(CHANGELOGS[file] ?? "", 200);
 }
 
 export const listInstalled = () => delay(installed, 80);

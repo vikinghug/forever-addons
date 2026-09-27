@@ -1,8 +1,16 @@
-import type { AddonDetail, AddonSummary } from "../types";
-import { SOURCE_NAMES, isInstallable } from "../types";
+import { useEffect, useState, type ReactNode } from "react";
+
+import { api, messageOf } from "../api";
 import { count, initials } from "../format";
+import type { Group, RelationRow } from "../relations";
+import { GROUPS, fileById, missingRequired, nameOf, needsAttention, relationsOf } from "../relations";
+import type { AddonDetail, AddonId, AddonSummary, FileListing, InstalledView } from "../types";
+import { SOURCE_NAMES, addonKey, isInstallable } from "../types";
 import type { RowState } from "./AddonRow";
 import { DescriptionView } from "./Description";
+import { FilesTab } from "./FilesTab";
+import { Gallery } from "./Gallery";
+import { RelationsTab } from "./RelationsTab";
 
 interface Props {
   /** The row picked in the list; its fields fill the header while the detail loads. */
@@ -10,41 +18,76 @@ interface Props {
   detail: AddonDetail | null;
   error: string | null;
   state: RowState;
-  busy: string | null;
+  installed: InstalledView;
+  /** What each addon's install or removal is doing, by `addonKey`. */
+  busyByKey: Record<string, string>;
   canInstall: boolean;
   onClose: () => void;
   onOpen: (url: string) => void;
-  onInstall: () => void;
+  /** Installs the addon, then each of `with` — the requirements it lacks. */
+  onInstall: (withAddons: AddonId[]) => void;
+  onInstallOther: (id: AddonId) => void;
+  onRemoveOther: (id: AddonId) => void;
+  onSelect: (addon: AddonSummary) => void;
   /** Installs from a zip the user downloaded, for a site-only addon. */
   onInstallFile: () => void;
   onRemove: () => void;
 }
 
-export function DetailPane({
-  addon,
-  detail,
-  error,
-  state,
-  busy,
-  canInstall,
-  onClose,
-  onOpen,
-  onInstall,
-  onInstallFile,
-  onRemove,
-}: Props) {
+export function DetailPane(props: Props) {
+  const { addon } = props;
   if (!addon) {
     return (
       <section className="detail" aria-label="Addon details">
         <div className="state">
           <h2>Pick an addon</h2>
-          <p>Its description, screenshots, and install options show up here.</p>
+          <p>Its description, screenshots, files, and related addons show up here.</p>
         </div>
       </section>
     );
   }
 
+  // Keyed so tabs and loaded files reset when another addon is picked.
+  return <AddonPane key={addonKey(addon.id)} {...props} addon={addon} />;
+}
+
+type Tab = "overview" | "files" | "relations";
+
+type Files =
+  | { state: "loading" }
+  | { state: "loaded"; listing: FileListing }
+  | { state: "failed"; message: string };
+
+function AddonPane({
+  addon,
+  detail,
+  error,
+  state,
+  installed,
+  busyByKey,
+  canInstall,
+  onClose,
+  onOpen,
+  onInstall,
+  onInstallFile,
+  onInstallOther,
+  onRemoveOther,
+  onSelect,
+  onRemove,
+}: Props & { addon: AddonSummary }) {
+  const [tab, setTab] = useState<Tab>("overview");
+  const files = useFiles(addon.id, installed);
   const shown = detail ?? addon;
+  const busy = busyByKey[addonKey(addon.id)] ?? null;
+  const busyOf = (id: AddonId) => busyByKey[addonKey(id)] ?? null;
+
+  const history = files.state === "loaded" && files.listing.kind === "listed" ? files.listing : null;
+  const groups = history ? relationsOf(history, installed) : null;
+  const missing = groups ? missingRequired(groups) : [];
+  const target = history ? fileById(history, history.target) : undefined;
+  const relationCount = groups
+    ? GROUPS.filter((group) => group !== "bundled").reduce((sum, group) => sum + groups[group].length, 0)
+    : 0;
 
   return (
     <section className="detail" aria-label="Addon details">
@@ -61,7 +104,8 @@ export function DetailPane({
           state={state}
           busy={busy}
           canInstall={canInstall}
-          onInstall={onInstall}
+          missing={missing}
+          onInstall={() => onInstall(missing.map((entry) => entry.id))}
           onInstallFile={onInstallFile}
           onRemove={onRemove}
         />
@@ -70,52 +114,192 @@ export function DetailPane({
         </button>
       </div>
 
-      <div className="detail-body">
-        <div className="detail-main">
-          <DownloadNotice
-            addon={shown}
-            busy={busy}
-            canInstall={canInstall}
-            onOpen={onOpen}
-            onInstallFile={onInstallFile}
-          />
-          {error && (
-            <p className="prose">
-              <span className="tag" data-tone="rust">Could not load</span> {error}
-            </p>
-          )}
-          {!detail && !error && <p className="prose">{addon.summary || "Loading…"}</p>}
-          {detail && (
-            <DescriptionView html={detail.description} onOpen={onOpen} />
-          )}
-
-          {detail && detail.screenshots.length > 0 && (
-            <div className="shots">
-              <span className="label">Screenshots</span>
-              <div className="shots-grid">
-                {detail.screenshots.slice(0, 6).map((shot) => (
-                  <img key={shot.url} src={shot.url} alt="" loading="lazy" />
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        <aside className="detail-side">
-          <Facts addon={shown} />
-          <div className="detail-links">
-            <button type="button" className="btn" onClick={() => onOpen(shown.page_url)}>
-              Open source page
-            </button>
-            {detail?.website_url && (
-              <button type="button" className="btn" onClick={() => onOpen(detail.website_url!)}>
-                Author's site
-              </button>
+      {history && (
+        <div className="detail-tabs" role="tablist" aria-label="Addon sections">
+          <TabButton tab="overview" current={tab} onPick={setTab}>Overview</TabButton>
+          <TabButton tab="files" current={tab} onPick={setTab}>
+            Files <span className="tab-count">{history.files.length}</span>
+          </TabButton>
+          <TabButton tab="relations" current={tab} onPick={setTab}>
+            Relations
+            {groups && needsAttention(groups) ? (
+              <span className="tab-alert" title="Needs attention" />
+            ) : (
+              <span className="tab-count">{relationCount}</span>
             )}
+          </TabButton>
+        </div>
+      )}
+
+      {tab === "files" && history ? (
+        <div className="detail-body" data-single role="tabpanel">
+          <FilesTab addonId={addon.id} pageUrl={shown.page_url} history={history} onOpen={onOpen} />
+        </div>
+      ) : tab === "relations" && groups ? (
+        <div className="detail-body" data-single role="tabpanel">
+          <RelationsTab
+            groups={groups}
+            addonName={shown.name}
+            targetName={target?.name ?? shown.name}
+            canInstall={canInstall}
+            busyOf={busyOf}
+            onInstall={onInstallOther}
+            onRemove={onRemoveOther}
+            onSelect={onSelect}
+            onOpen={onOpen}
+          />
+        </div>
+      ) : (
+        <div className="detail-body" role={history ? "tabpanel" : undefined}>
+          <div className="detail-main">
+            <DownloadNotice
+              addon={shown}
+              busy={busy}
+              canInstall={canInstall}
+              onOpen={onOpen}
+              onInstallFile={onInstallFile}
+            />
+            {error && (
+              <p className="prose">
+                <span className="tag" data-tone="rust">Could not load</span> {error}
+              </p>
+            )}
+            {detail && <Gallery shots={detail.screenshots} />}
+            {!detail && !error && <p className="prose">{addon.summary || "Loading…"}</p>}
+            {detail && <DescriptionView html={detail.description} onOpen={onOpen} />}
           </div>
-        </aside>
-      </div>
+
+          <aside className="detail-side">
+            {groups && (
+              <Preflight
+                groups={groups}
+                updating={state === "installed" || state === "outdated"}
+                onReview={() => setTab("relations")}
+              />
+            )}
+            {files.state === "failed" && (
+              <p className="side-note">Files and related addons could not load: {files.message}</p>
+            )}
+            <Facts addon={shown} />
+            <div className="detail-links">
+              <button type="button" className="btn" onClick={() => onOpen(shown.page_url)}>
+                Open source page
+              </button>
+              {detail?.website_url && (
+                <button type="button" className="btn" onClick={() => onOpen(detail.website_url!)}>
+                  Author's site
+                </button>
+              )}
+              {addon.id.source === "curseforge" && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => onOpen(`${shown.page_url.replace(/\/+$/, "")}/comments`)}
+                >
+                  Comments ↗
+                </button>
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
     </section>
+  );
+}
+
+function TabButton({
+  tab,
+  current,
+  onPick,
+  children,
+}: {
+  tab: Tab;
+  current: Tab;
+  onPick: (tab: Tab) => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      className="tab"
+      aria-selected={tab === current}
+      onClick={() => onPick(tab)}
+    >
+      {children}
+    </button>
+  );
+}
+
+/**
+ * The file listing for this addon, fetched again when its install changes so
+ * the installed file and the relations' standings stay current.
+ */
+function useFiles(id: AddonId, installed: InstalledView): Files {
+  const [files, setFiles] = useState<Files>({ state: "loading" });
+  const record = installed.managed.find((entry) => addonKey(entry.id) === addonKey(id));
+  const installedAt = record?.installed_at ?? null;
+
+  const { source, key } = id;
+
+  useEffect(() => {
+    let current = true;
+    api
+      .getAddonFiles({ source, key })
+      .then((listing) => current && setFiles({ state: "loaded", listing }))
+      .catch((cause) => current && setFiles({ state: "failed", message: messageOf(cause) }));
+    return () => {
+      current = false;
+    };
+  }, [source, key, installedAt]);
+
+  return files;
+}
+
+/** What to sort out before installing: the one boxed element in the side column. */
+function Preflight({
+  groups,
+  updating,
+  onReview,
+}: {
+  groups: Record<Group, RelationRow[]>;
+  updating: boolean;
+  onReview: () => void;
+}) {
+  const conflicts = groups.conflicts.filter((row) => row.standing !== "absent");
+  const missing = groups.needs.filter((row) => row.standing === "absent");
+  const companions = groups["works-with"].filter((row) => row.standing !== "absent");
+  if (conflicts.length + missing.length + companions.length === 0) return null;
+
+  const names = (rows: RelationRow[]) => rows.map((row) => nameOf(row.addon)).join(", ");
+
+  return (
+    <div className="preflight">
+      <span className="label">Before you {updating ? "update" : "install"}</span>
+      {conflicts.length > 0 && (
+        <p className="preflight-item" data-tone="rust">
+          <span>
+            <b>Conflicts with {names(conflicts)}</b>, which you have installed.{" "}
+            <button type="button" className="link" onClick={onReview}>Review</button>
+          </span>
+        </p>
+      )}
+      {missing.length > 0 && (
+        <p className="preflight-item" data-tone="frost">
+          <span>
+            <b>Needs {names(missing)}</b>. {updating ? "Updating" : "Installing"} brings{" "}
+            {missing.length === 1 ? "it" : "them"} along when this app can.
+          </span>
+        </p>
+      )}
+      {companions.length > 0 && (
+        <p className="preflight-item" data-tone="moss">
+          <span>
+            Works with {names(companions)}, which you have.
+          </span>
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -124,6 +308,7 @@ function Actions({
   state,
   busy,
   canInstall,
+  missing,
   onInstall,
   onInstallFile,
   onRemove,
@@ -132,6 +317,8 @@ function Actions({
   state: RowState;
   busy: string | null;
   canInstall: boolean;
+  /** Requirements the install brings along. */
+  missing: AddonSummary[];
   onInstall: () => void;
   onInstallFile: () => void;
   onRemove: () => void;
@@ -170,6 +357,11 @@ function Actions({
         }
       >
         {busy ?? `${state === "outdated" ? "Update" : installed ? "Reinstall" : "Install"}${siteOnly ? " from zip…" : ""}`}
+        {!busy && !siteOnly && missing.length > 0 && (
+          <span className="btn-sub">
+            + {missing.length === 1 ? missing[0].name : `${missing.length} more`}
+          </span>
+        )}
       </button>
     </div>
   );

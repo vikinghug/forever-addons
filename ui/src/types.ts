@@ -39,8 +39,79 @@ export interface AddonDetail extends AddonSummary {
   /** Sanitized HTML (`SafeHtml`); the summary as a paragraph when the source has none. */
   description: string;
   website_url: string | null;
-  screenshots: { url: string }[];
+  screenshots: Screenshot[];
 }
+
+export interface Screenshot {
+  url: string;
+  /** A smaller rendition for strips; `url` serves when there is none. */
+  thumbnail_url: string | null;
+  /** Plain text, never markup. */
+  title: string | null;
+  description: string | null;
+}
+
+/** How stable the author says a file is. */
+export type Channel =
+  | { kind: "release" }
+  | { kind: "beta" }
+  | { kind: "alpha" }
+  | { kind: "unknown"; code: number };
+
+/** What a file says about another addon. */
+export type Relation =
+  | { kind: "required" }
+  | { kind: "optional" }
+  | { kind: "tool" }
+  | { kind: "incompatible" }
+  /** Shipped inside the file's own folders. */
+  | { kind: "embedded" }
+  /** Packaged into the file's archive as folders of its own. */
+  | { kind: "included" }
+  | { kind: "unknown"; code: number };
+
+export interface Dependency {
+  addon: AddonId;
+  relation: Relation;
+}
+
+export interface PublishedFile {
+  /** Source-local file id (`FileKey`). */
+  id: string;
+  /** The author's name for the build; usually its version. */
+  name: string;
+  file_name: string;
+  channel: Channel;
+  /** RFC 3339, UTC. */
+  published_at: string;
+  size: number | null;
+  downloads: number | null;
+  /** Folders the archive places under Interface/AddOns. */
+  folders: string[];
+  dependencies: Dependency[];
+}
+
+export type RelatedAddon =
+  | ({ availability: "listed" } & AddonSummary)
+  /** Listed with no Forever file, typically an embed-only library. */
+  | { availability: "no-forever-file"; id: AddonId; name: string; page_url: string }
+  /** Missing from the source: deleted, private, or moderated. */
+  | { availability: "unlisted"; id: AddonId };
+
+export interface FileHistory {
+  /** Newest first. */
+  files: PublishedFile[];
+  /** The file an install would fetch now. */
+  target: string | null;
+  /** The file installed, inferred from the install time. */
+  installed: string | null;
+  related: RelatedAddon[];
+}
+
+export type FileListing =
+  | ({ kind: "listed" } & FileHistory)
+  /** The source publishes one current download and nothing older. */
+  | { kind: "not-offered" };
 
 export interface InstalledFolder {
   folder: string;

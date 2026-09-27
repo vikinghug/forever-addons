@@ -175,21 +175,33 @@ export default function App() {
 
   // --- actions ------------------------------------------------------------
 
-  const withBusy = async (id: AddonId, label: string, work: () => Promise<InstalledView>) => {
+  /** Runs one install or removal; false when it failed and said why. */
+  const withBusy = async (
+    id: AddonId,
+    label: string,
+    work: () => Promise<InstalledView>,
+  ): Promise<boolean> => {
     const key = addonKey(id);
     setBusy((current) => ({ ...current, [key]: label }));
     setError(null);
 
     try {
       setInstalled(await work());
+      return true;
     } catch (cause) {
       setError(messageOf(cause));
+      return false;
     } finally {
       setBusy(({ [key]: _dropped, ...rest }) => rest);
     }
   };
 
-  const install = (id: AddonId) => withBusy(id, "Installing…", () => api.installAddon(id));
+  /** Installs `id`, then each requirement it lacks, stopping at a failure. */
+  const install = async (id: AddonId, withAddons: AddonId[] = []) => {
+    for (const next of [id, ...withAddons]) {
+      if (!(await withBusy(next, "Installing…", () => api.installAddon(next)))) return;
+    }
+  };
   const installFile = async (id: AddonId, name: string) => {
     const path = await chooseArchive(name);
     if (!path) return;
@@ -341,11 +353,15 @@ export default function App() {
             detail={detail}
             error={detailError}
             state={selected ? stateOf(selected, installed) : "none"}
-            busy={selected ? (busy[addonKey(selected.id)] ?? null) : null}
+            installed={installed}
+            busyByKey={busy}
             canInstall={canInstall}
             onClose={() => setSelected(null)}
             onOpen={openUrl}
-            onInstall={() => selected && install(selected.id)}
+            onInstall={(withAddons) => selected && install(selected.id, withAddons)}
+            onInstallOther={(id) => install(id)}
+            onRemoveOther={remove}
+            onSelect={openDetail}
             onInstallFile={() => selected && installFile(selected.id, selected.name)}
             onRemove={() => selected && remove(selected.id)}
           />

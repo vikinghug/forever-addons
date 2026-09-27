@@ -72,6 +72,23 @@ pub enum Download {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Screenshot {
     pub url: String,
+    /// A smaller rendition for strips and grids, when the source makes one.
+    pub thumbnail_url: Option<String>,
+    /// The author's caption, as plain text.
+    pub title: Option<String>,
+    pub description: Option<String>,
+}
+
+impl Screenshot {
+    /// An image the source publishes with no caption or thumbnail.
+    pub fn bare(url: String) -> Self {
+        Self {
+            url,
+            thumbnail_url: None,
+            title: None,
+            description: None,
+        }
+    }
 }
 
 /// One catalog row: everything the browse list renders, and nothing that costs

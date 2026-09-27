@@ -10,6 +10,7 @@ import type {
   AppStatus,
   CatalogQuery,
   FetchProgress,
+  FileListing,
   InstallProgress,
   InstalledView,
   SearchResults,
@@ -57,6 +58,13 @@ export const api = {
 
   getAddonDetail: (id: AddonId): Promise<AddonDetail> =>
     isDesktop ? call("get_addon_detail", { id }) : mock.getAddonDetail(id),
+
+  getAddonFiles: (id: AddonId): Promise<FileListing> =>
+    isDesktop ? call("get_addon_files", { id }) : mock.getAddonFiles(id),
+
+  /** Sanitized HTML. */
+  getFileChangelog: (id: AddonId, file: string): Promise<string> =>
+    isDesktop ? call("get_file_changelog", { id, file }) : mock.getFileChangelog(id, file),
 
   listInstalled: (): Promise<InstalledView> =>
     isDesktop ? call("list_installed") : mock.listInstalled(),

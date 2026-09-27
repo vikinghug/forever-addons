@@ -21,8 +21,9 @@ use std::collections::HashSet;
 use percent_encoding::percent_decode_str;
 
 use crate::domain::{
-    AddonDetail, AddonId, AddonKey, AddonSummary, Download, Expansion, Markup, Screenshot, Sort,
-    SortDirection, SortField, SourceId,
+    AddonDetail, AddonFolder, AddonId, AddonKey, AddonSummary, Channel, Dependency, Download,
+    Expansion, FileHistory, FileKey, Markup, PublishedFile, RelatedAddon, Relation, SafeHtml,
+    Screenshot, Sort, SortDirection, SortField, SourceId, mentioned_addons,
 };
 use crate::error::{AppError, Result};
 use crate::source::http::HttpClient;
@@ -38,6 +39,11 @@ const CLASS_ADDONS: u32 = 1;
 const FOREVER_VERSION_TYPE: u64 = 88568;
 /// A stable release, in CurseForge's release-type numbering (2 beta, 3 alpha).
 const RELEASE: u8 = 1;
+/// The API's largest page. Files come newest first, so one page is the
+/// recent history, which is all the Files tab shows.
+const FILES_PAGE_SIZE: u32 = 50;
+/// The base for relative links in a changelog, which has no addon page.
+const ADDONS_PAGE: &str = "https://www.curseforge.com/wow/addons/";
 /// One page of search results — the API's maximum.
 const SEARCH_PAGE_SIZE: u32 = 50;
 /// Shown in place of search results when the key may not search.
@@ -87,6 +93,10 @@ struct Links {
 struct Asset {
     thumbnail_url: Option<String>,
     url: Option<String>,
+    /// Often just the uploaded filename.
+    title: Option<String>,
+    /// HTML.
+    description: Option<String>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -105,8 +115,29 @@ struct Author {
 #[serde(rename_all = "camelCase", default)]
 struct File {
     id: u64,
+    display_name: String,
+    file_name: String,
+    release_type: u8,
     file_date: String,
+    file_length: Option<u64>,
+    download_count: Option<u64>,
     download_url: Option<String>,
+    dependencies: Vec<FileDependency>,
+    modules: Vec<Module>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct FileDependency {
+    mod_id: u64,
+    relation_type: u8,
+}
+
+/// One top-level folder of a file's archive.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default)]
+struct Module {
+    name: String,
 }
 
 /// One row of `latestFilesIndexes` — the per-game-version pointer into
@@ -407,17 +438,182 @@ pub(super) async fn fetch_detail(
         )
     })?;
 
+    let markup = Markup::new(&summary, unwrap_linkout);
     Ok(AddonDetail {
-        description: Markup::new(&summary, unwrap_linkout).html(&description.data),
+        description: markup.html(&description.data),
         website_url: found.links.source_url.as_deref().and_then(non_empty),
         screenshots: found
             .screenshots
             .iter()
-            .filter_map(|asset| asset.url.as_deref().and_then(non_empty))
-            .map(|url| Screenshot { url })
+            .filter_map(|asset| to_screenshot(asset, &markup))
             .collect(),
         summary,
     })
+}
+
+fn to_screenshot(asset: &Asset, markup: &Markup<'_>) -> Option<Screenshot> {
+    let url = asset.url.as_deref().and_then(non_empty)?;
+    Some(Screenshot {
+        url,
+        thumbnail_url: asset.thumbnail_url.as_deref().and_then(non_empty),
+        title: asset.title.as_deref().and_then(caption_title),
+        description: asset
+            .description
+            .as_deref()
+            .and_then(|html| markup.text(html)),
+    })
+}
+
+/// A screenshot title, unless it is only the uploaded filename.
+fn caption_title(raw: &str) -> Option<String> {
+    let title = non_empty(raw)?;
+    let lower = title.to_ascii_lowercase();
+    let is_filename = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]
+        .iter()
+        .any(|extension| lower.ends_with(extension));
+    (!is_filename).then_some(title)
+}
+
+/// Every Forever file of an addon, with the addons they depend on looked up
+/// in one more request.
+pub(super) async fn fetch_files(
+    http: &HttpClient,
+    api_key: &str,
+    key: &AddonKey,
+    installed_at: Option<&str>,
+) -> Result<FileHistory> {
+    let url = format!(
+        "{API}/mods/{key}/files?gameVersionTypeId={FOREVER_VERSION_TYPE}&pageSize={FILES_PAGE_SIZE}&index=0"
+    );
+    let json = http
+        .get_json_authed(SOURCE, &url, &auth_headers(api_key))
+        .await?;
+    let response: DataFiles = serde_json::from_value(json)
+        .map_err(|err| missing_field(SOURCE, &url, "a list of files", err.to_string()))?;
+
+    let files = response
+        .data
+        .iter()
+        .filter_map(to_published_file)
+        .collect::<Vec<_>>();
+    let related = lookup_related(http, api_key, &mentioned_addons(&files)).await?;
+    Ok(FileHistory::new(files, installed_at, related))
+}
+
+/// One file's changelog, sanitized like a description.
+pub(super) async fn fetch_changelog(
+    http: &HttpClient,
+    api_key: &str,
+    key: &AddonKey,
+    file: &FileKey,
+) -> Result<SafeHtml> {
+    let url = format!("{API}/mods/{key}/files/{file}/changelog");
+    let json = http
+        .get_json_authed(SOURCE, &url, &auth_headers(api_key))
+        .await?;
+    let changelog: DataString = serde_json::from_value(json)
+        .map_err(|err| missing_field(SOURCE, &url, "a changelog string", err.to_string()))?;
+
+    Ok(Markup::for_page(ADDONS_PAGE, unwrap_linkout).html(&changelog.data))
+}
+
+/// The addons files depend on, in `ids` order. Unlike [`lookup_many`], a mod
+/// with no Forever file is kept — a library that only ships embedded is
+/// still worth naming — and a mod CurseForge leaves out is kept as unlisted.
+async fn lookup_related(
+    http: &HttpClient,
+    api_key: &str,
+    ids: &[AddonId],
+) -> Result<Vec<RelatedAddon>> {
+    let mod_ids = ids
+        .iter()
+        .filter_map(|id| id.key.as_str().parse::<u64>().ok())
+        .collect::<Vec<_>>();
+    if mod_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let url = format!("{API}/mods");
+    let body = serde_json::json!({ "modIds": mod_ids });
+    let json = http
+        .post_json_authed(SOURCE, &url, &auth_headers(api_key), &body)
+        .await?;
+    let response: DataMods = serde_json::from_value(json)
+        .map_err(|err| missing_field(SOURCE, &url, "a list of mods", err.to_string()))?;
+
+    Ok(ids
+        .iter()
+        .map(|id| related_addon(id, &response.data))
+        .collect())
+}
+
+fn related_addon(id: &AddonId, found: &[Mod]) -> RelatedAddon {
+    let Some(found) = found
+        .iter()
+        .find(|found| found.id.to_string() == id.key.as_str())
+    else {
+        return RelatedAddon::Unlisted { id: id.clone() };
+    };
+
+    match to_summary(found) {
+        Some(summary) => RelatedAddon::Listed(Box::new(summary)),
+        None => RelatedAddon::NoForeverFile {
+            id: id.clone(),
+            name: found.name.trim().to_owned(),
+            page_url: page_url(found),
+        },
+    }
+}
+
+/// `None` only for a file with no id to key it by.
+fn to_published_file(file: &File) -> Option<PublishedFile> {
+    Some(PublishedFile {
+        id: FileKey::new(file.id.to_string()).filter(|_| file.id != 0)?,
+        name: non_empty(&file.display_name).unwrap_or_else(|| file.file_name.clone()),
+        file_name: file.file_name.clone(),
+        channel: channel(file.release_type),
+        published_at: file.file_date.clone(),
+        size: file.file_length,
+        downloads: file.download_count,
+        // A module name that could not be a folder is no folder this file
+        // installs; the archive planner refuses such paths too.
+        folders: file
+            .modules
+            .iter()
+            .filter_map(|module| AddonFolder::new(module.name.as_str()).ok())
+            .collect(),
+        dependencies: file
+            .dependencies
+            .iter()
+            .filter_map(|dependency| {
+                Some(Dependency {
+                    addon: addon_id(SOURCE, &dependency.mod_id.to_string())?,
+                    relation: relation(dependency.relation_type),
+                })
+            })
+            .collect(),
+    })
+}
+
+fn channel(release_type: u8) -> Channel {
+    match release_type {
+        1 => Channel::Release,
+        2 => Channel::Beta,
+        3 => Channel::Alpha,
+        code => Channel::Unknown { code },
+    }
+}
+
+fn relation(relation_type: u8) -> Relation {
+    match relation_type {
+        1 => Relation::Embedded,
+        2 => Relation::Optional,
+        3 => Relation::Required,
+        4 => Relation::Tool,
+        5 => Relation::Incompatible,
+        6 => Relation::Included,
+        code => Relation::Unknown { code },
+    }
 }
 
 /// The summary comes from a lookup made moments before the install, so its
@@ -490,6 +686,11 @@ struct DataString {
 #[derive(Debug, serde::Deserialize)]
 struct DataMod {
     data: Mod,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DataFiles {
+    data: Vec<File>,
 }
 
 async fn fetch_mod(http: &HttpClient, api_key: &str, key: &AddonKey) -> Result<Mod> {
@@ -948,5 +1149,119 @@ mod tests {
             Markup::new(&summary, unwrap_linkout).html(html).as_str(),
             r#"<a href="https://github.com/Questie">GitHub</a>"#
         );
+    }
+
+    /// Two files as `/mods/{id}/files` returns them, trimmed.
+    const DBM_DUNGEONS_FILES: &str = r#"{ "data": [
+        {
+            "id": 8945003,
+            "displayName": "DBM-Dungeons-r264-8-g0cd2508",
+            "fileName": "DBM-Dungeons-r264-8-g0cd2508.zip",
+            "releaseType": 3,
+            "fileDate": "2026-09-22T05:03:45.77Z",
+            "fileLength": 1837914,
+            "downloadCount": 5568,
+            "dependencies": [
+                { "modId": 3358, "relationType": 3 },
+                { "modId": 14320, "relationType": 9 }
+            ],
+            "modules": [
+                { "name": "DBM-Party-Forever", "fingerprint": 1 },
+                { "name": "../escape", "fingerprint": 2 }
+            ]
+        },
+        {
+            "id": 8934525,
+            "displayName": "",
+            "fileName": "DBM-Dungeons-r264.zip",
+            "releaseType": 1,
+            "fileDate": "2026-09-18T10:00:00Z",
+            "dependencies": [],
+            "modules": []
+        }
+    ] }"#;
+
+    fn dbm_files() -> Vec<PublishedFile> {
+        let response: DataFiles = serde_json::from_str(DBM_DUNGEONS_FILES).expect("fixture parses");
+        response.data.iter().filter_map(to_published_file).collect()
+    }
+
+    #[test]
+    fn reads_a_listed_file_with_its_channel_folders_and_dependencies() {
+        let file = &dbm_files()[0];
+
+        assert_eq!(file.id.as_str(), "8945003");
+        assert_eq!(file.channel, Channel::Alpha);
+        assert_eq!(file.size, Some(1_837_914));
+        assert_eq!(
+            file.folders
+                .iter()
+                .map(AddonFolder::as_str)
+                .collect::<Vec<_>>(),
+            ["DBM-Party-Forever"]
+        );
+        assert_eq!(file.dependencies[0].addon.to_string(), "curseforge:3358");
+        assert_eq!(file.dependencies[0].relation, Relation::Required);
+    }
+
+    #[test]
+    fn preserves_an_unknown_relation_code() {
+        assert_eq!(
+            dbm_files()[0].dependencies[1].relation,
+            Relation::Unknown { code: 9 }
+        );
+    }
+
+    #[test]
+    fn names_a_file_by_its_archive_when_the_display_name_is_blank() {
+        assert_eq!(dbm_files()[1].name, "DBM-Dungeons-r264.zip");
+    }
+
+    #[test]
+    fn keeps_a_related_mod_without_a_forever_file_by_name() {
+        let mut library = questie();
+        library.name = "LibSharedMedia-3.0".to_owned();
+        library.latest_files_indexes.clear();
+        let id = addon_id(SOURCE, "1032100").expect("valid key");
+
+        assert_eq!(
+            related_addon(&id, &[library]),
+            RelatedAddon::NoForeverFile {
+                id: id.clone(),
+                name: "LibSharedMedia-3.0".to_owned(),
+                page_url: "https://www.curseforge.com/wow/addons/questie-forever".to_owned(),
+            }
+        );
+        assert!(matches!(
+            related_addon(&id, &[questie()]),
+            RelatedAddon::Listed(_)
+        ));
+    }
+
+    #[test]
+    fn keeps_a_related_mod_curseforge_left_out_as_unlisted() {
+        let id = addon_id(SOURCE, "999").expect("valid key");
+
+        assert_eq!(
+            related_addon(&id, &[questie()]),
+            RelatedAddon::Unlisted { id: id.clone() }
+        );
+    }
+
+    #[test]
+    fn captions_a_screenshot_but_not_with_its_filename() {
+        let summary = to_summary(&questie()).expect("mod has a forever file");
+        let markup = Markup::new(&summary, unwrap_linkout);
+        let asset = Asset {
+            thumbnail_url: Some("https://media.forgecdn.net/thumb.png".to_owned()),
+            url: Some("https://media.forgecdn.net/full.png".to_owned()),
+            title: Some("dbm-warnings1.PNG".to_owned()),
+            description: Some("<p>Some raid warnings\n</p>".to_owned()),
+        };
+
+        let shot = to_screenshot(&asset, &markup).expect("has a url");
+        assert_eq!(shot.title, None);
+        assert_eq!(shot.description.as_deref(), Some("Some raid warnings"));
+        assert_eq!(caption_title("Quest pins").as_deref(), Some("Quest pins"));
     }
 }

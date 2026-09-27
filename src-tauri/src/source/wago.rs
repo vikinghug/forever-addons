@@ -126,7 +126,7 @@ pub(super) async fn fetch_detail(
             .gallery
             .iter()
             .filter_map(|url| non_empty(url))
-            .map(|url| Screenshot { url })
+            .map(Screenshot::bare)
             .collect(),
         summary: summary.clone(),
     })

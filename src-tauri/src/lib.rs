@@ -46,6 +46,8 @@ pub fn run() {
             commands::refresh_source,
             commands::search_addons,
             commands::get_addon_detail,
+            commands::get_addon_files,
+            commands::get_file_changelog,
             commands::list_installed,
             commands::install_addon,
             commands::install_addon_file,

@@ -11,7 +11,8 @@ pub mod http;
 pub mod wago;
 
 use crate::domain::{
-    AddonDetail, AddonId, AddonKey, AddonSummary, CatalogSource, LiveSource, Sort, SourceId,
+    AddonDetail, AddonId, AddonKey, AddonSummary, CatalogSource, FileKey, FileListing, LiveSource,
+    SafeHtml, Sort, SourceId,
 };
 use crate::error::Result;
 use crate::source::http::HttpClient;
@@ -189,6 +190,43 @@ impl Sources {
             LiveSource::CurseForge => {
                 curseforge::fetch_detail(&self.http, auth.curseforge_key()?, key).await
             }
+        }
+    }
+
+    /// Every file a source lists for an addon. `installed_at` is when the
+    /// manifest says it was installed, so the history can mark that file.
+    pub async fn fetch_files(
+        &self,
+        id: &AddonId,
+        installed_at: Option<&str>,
+        auth: &SourceAuth,
+    ) -> Result<FileListing> {
+        match id.source {
+            SourceId::CurseForge => {
+                curseforge::fetch_files(&self.http, auth.curseforge_key()?, &id.key, installed_at)
+                    .await
+                    .map(FileListing::Listed)
+            }
+            // Wago and tracked GitHub releases are cataloged as one current
+            // download each.
+            SourceId::Wago | SourceId::GitHub => Ok(FileListing::NotOffered),
+        }
+    }
+
+    /// One listed file's changelog.
+    pub async fn fetch_changelog(
+        &self,
+        id: &AddonId,
+        file: &FileKey,
+        auth: &SourceAuth,
+    ) -> Result<SafeHtml> {
+        match id.source {
+            SourceId::CurseForge => {
+                curseforge::fetch_changelog(&self.http, auth.curseforge_key()?, &id.key, file).await
+            }
+            SourceId::Wago | SourceId::GitHub => Err(crate::error::AppError::NoFileHistory {
+                source_id: id.source,
+            }),
         }
     }
 

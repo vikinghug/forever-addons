@@ -68,6 +68,9 @@ pub enum AppError {
     #[error("the archive for {addon_id} is not a readable zip: {reason}")]
     ArchiveUnreadable { addon_id: AddonId, reason: String },
 
+    #[error("{source_id} lists only each addon's current download, with no older files")]
+    NoFileHistory { source_id: SourceId },
+
     #[error("{addon_id} is not installed")]
     NotInstalled { addon_id: AddonId },
 

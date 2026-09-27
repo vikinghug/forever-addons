@@ -125,6 +125,27 @@ impl<'a> Markup<'a> {
         }
     }
 
+    /// Markup that belongs to a page rather than to an addon's description —
+    /// a file's changelog: nothing to fall back on and no title to drop.
+    pub fn for_page(page_url: &str, unwrap: UnwrapLink) -> Markup<'static> {
+        Markup {
+            name: "",
+            summary: "",
+            links: Links {
+                base: Url::parse(page_url).ok(),
+                unwrap,
+            },
+        }
+    }
+
+    /// The visible text of `html` on one line, or `None` when it has none —
+    /// for captions, which the UI renders as text rather than markup.
+    pub fn text(&self, html: &str) -> Option<String> {
+        let text = text_of(&self.sanitize(html));
+        let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        (!line.is_empty()).then_some(line)
+    }
+
     /// Sanitized `html`, or the plain summary when nothing is left of it.
     pub fn html(&self, html: &str) -> SafeHtml {
         let cleaned = self.sanitize(html);
@@ -497,6 +518,29 @@ mod tests {
             safe.as_str().starts_with("<table><thead><tr><th>a</th>"),
             "{}",
             safe.as_str()
+        );
+    }
+
+    #[test]
+    fn reads_a_caption_as_one_line_of_text() {
+        let markup = Markup::for_page("https://www.curseforge.com/wow/addons/", keep_link);
+
+        assert_eq!(
+            markup
+                .text("<p>Some raid\n warnings &amp; <b>timers</b>\n</p>")
+                .as_deref(),
+            Some("Some raid warnings & timers")
+        );
+        assert_eq!(markup.text("<p>&nbsp;</p>"), None);
+    }
+
+    #[test]
+    fn keeps_a_changelog_heading_that_a_description_would_drop() {
+        let markup = Markup::for_page("https://www.curseforge.com/wow/addons/", keep_link);
+
+        assert_eq!(
+            markup.html("<h2>Questie</h2><p>Fixes</p>").as_str(),
+            "<h2>Questie</h2><p>Fixes</p>"
         );
     }
 }
