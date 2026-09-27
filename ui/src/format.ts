@@ -54,3 +54,27 @@ export function initials(name: string): string {
   if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
   return (words[0][0] + words[1][0]).toUpperCase();
 }
+
+/**
+ * "3d ago" for the last two weeks, then "16 Sep", with the year once it is
+ * not this one. Missing or unparseable input reads as a dash, like `count`.
+ */
+export function ago(iso: string | null): string {
+  if (!iso) return "—";
+
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "—";
+
+  const days = Math.floor((Date.now() - at.getTime()) / 86_400_000);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 14) return `${days}d ago`;
+
+  const sameYear = at.getUTCFullYear() === new Date().getUTCFullYear();
+  return at.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: sameYear ? undefined : "numeric",
+    timeZone: "UTC",
+  });
+}

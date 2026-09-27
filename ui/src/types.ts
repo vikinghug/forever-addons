@@ -34,8 +34,14 @@ export interface AddonSummary {
   download: Download;
 }
 
+/** In the markup the source publishes; rendered by `DescriptionView`. */
+export type Description =
+  | { format: "html"; text: string }
+  | { format: "markdown"; text: string }
+  | { format: "plain"; text: string };
+
 export interface AddonDetail extends AddonSummary {
-  description: string;
+  description: Description;
   website_url: string | null;
   screenshots: { url: string }[];
 }
@@ -73,13 +79,21 @@ export interface InstalledView {
   unmanaged: InstalledFolder[];
 }
 
+/** Whether a live source's key may search, as learned this session. */
+export type SearchAccess = "untested" | "allowed" | "forbidden";
+
 export interface SourceStatus {
   id: SourceId;
   name: string;
   site_url: string;
   enabled: boolean;
+  /** Catalog sources are pulled and cached; live ones are queried per search. */
+  listing: "catalog" | "live";
+  /** Only set for live sources. */
+  search_access: SearchAccess | null;
   requires_api_key: boolean;
   api_key_configured: boolean;
+  /** Always 0 for a live source, which keeps no catalog. */
   addon_count: number;
   fetched_at: string | null;
   /** The repositories the user tracks — only ever non-empty for GitHub. */
@@ -93,10 +107,113 @@ export interface AppStatus {
   sources: SourceStatus[];
 }
 
+/** Mirrors `domain::SortField`: only fields every source can fill. */
+export type SortField = "downloads" | "updated" | "name" | "author";
+export type SortDirection = "ascending" | "descending";
+
+export interface Sort {
+  field: SortField;
+  direction: SortDirection;
+}
+
+/** One direction of a sort field, named in the field's own terms. */
+export interface SortChoice {
+  direction: SortDirection;
+  /** On the menu's segmented button: "Most", "A–Z". */
+  short: string;
+  /** On the menu's trigger: "Most downloaded", "Name, A–Z". */
+  long: string;
+}
+
+/** Every browse order. Each field lists its natural direction first:
+ * biggest and newest first, names A to Z. */
+export const SORT_OPTIONS: { field: SortField; label: string; choices: [SortChoice, SortChoice] }[] = [
+  {
+    field: "downloads",
+    label: "Downloads",
+    choices: [
+      { direction: "descending", short: "Most", long: "Most downloaded" },
+      { direction: "ascending", short: "Fewest", long: "Fewest downloads" },
+    ],
+  },
+  {
+    field: "updated",
+    label: "Last updated",
+    choices: [
+      { direction: "descending", short: "Newest", long: "Recently updated" },
+      { direction: "ascending", short: "Oldest", long: "Least recently updated" },
+    ],
+  },
+  {
+    field: "name",
+    label: "Name",
+    choices: [
+      { direction: "ascending", short: "A–Z", long: "Name, A–Z" },
+      { direction: "descending", short: "Z–A", long: "Name, Z–A" },
+    ],
+  },
+  {
+    field: "author",
+    label: "Author",
+    choices: [
+      { direction: "ascending", short: "A–Z", long: "Author, A–Z" },
+      { direction: "descending", short: "Z–A", long: "Author, Z–A" },
+    ],
+  },
+];
+
+/** "Most downloaded" for the default sort. */
+export function sortName(sort: Sort): string {
+  const option = SORT_OPTIONS.find((entry) => entry.field === sort.field);
+  const choice = option?.choices.find((entry) => entry.direction === sort.direction);
+  return choice?.long ?? sort.field;
+}
+
+export const DEFAULT_SORT: Sort = { field: "downloads", direction: "descending" };
+
 export interface CatalogQuery {
   text: string;
   category: string | null;
   sources: SourceId[] | null;
+  sort: Sort;
+}
+
+export interface SourceNotice {
+  source: SourceId;
+  message: string;
+}
+
+/** What the browse panel narrows by. `sources: null` means every source;
+ * hiding installed addons happens in the UI, not in the query. */
+export interface BrowseQuery {
+  text: string;
+  category: string | null;
+  sources: SourceId[] | null;
+  sort: Sort;
+  hideInstalled: boolean;
+}
+
+export interface SourceCount {
+  source: SourceId;
+  count: number;
+}
+
+export interface CategoryCount {
+  name: string;
+  count: number;
+}
+
+export interface SearchResults {
+  addons: AddonSummary[];
+  /** Matches for the text before the source and category filters. */
+  text_matches: number;
+  /** Matches per searched source, before the source filter. A live source
+   * the query left out was never asked and has no entry. */
+  sources: SourceCount[];
+  /** Categories among the matches before the category filter. */
+  categories: CategoryCount[];
+  /** Why a live source's results are partial or missing. */
+  notices: SourceNotice[];
 }
 
 export interface FetchProgress {

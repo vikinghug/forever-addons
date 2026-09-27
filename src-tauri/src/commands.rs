@@ -7,10 +7,11 @@ use std::path::PathBuf;
 
 use tauri::{AppHandle, Emitter, State};
 
-use crate::catalog::{self, Catalog, CatalogQuery};
-use crate::domain::{AddonDetail, AddonId, AddonSummary, SourceId};
+use crate::catalog::{self, Catalog, CatalogQuery, SearchResults};
+use crate::domain::{AddonDetail, AddonId, AddonKey, AddonSummary, Listing, LiveSource, SourceId};
 use crate::error::{AppError, Result};
 use crate::install::{self, InstallProgress};
+use crate::source::{SearchAccess, SourceNotice};
 use crate::state::AppState;
 use crate::view::{self, InstalledView};
 use crate::wow;
@@ -31,15 +32,27 @@ pub struct AppStatus {
     pub sources: Vec<SourceStatus>,
 }
 
+/// The UI's view of [`Listing`]: whether a source has a catalog to pull.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ListingKind {
+    Catalog,
+    Live,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SourceStatus {
     pub id: SourceId,
     pub name: &'static str,
     pub site_url: &'static str,
     pub enabled: bool,
+    pub listing: ListingKind,
+    /// Only for live sources: what this session learned about search.
+    pub search_access: Option<SearchAccess>,
     pub requires_api_key: bool,
     /// Only meaningful when `requires_api_key` — whether a key is saved.
     pub api_key_configured: bool,
+    /// Always 0 for a live source, which keeps no catalog.
     pub addon_count: usize,
     /// RFC 3339, or `None` when this source has never been refreshed.
     pub fetched_at: Option<String>,
@@ -60,37 +73,43 @@ pub async fn get_status(state: State<'_, AppState>) -> Result<AppStatus> {
         },
     };
 
+    let mut sources = Vec::with_capacity(SourceId::ALL.len());
+    for id in SourceId::ALL {
+        let found = catalogs.iter().find(|catalog| catalog.source == id);
+        let key_saved = match id {
+            SourceId::CurseForge => settings.curseforge_api_key.as_deref(),
+            SourceId::Wago => settings.wago_token.as_deref(),
+            SourceId::GitHub => None,
+        }
+        .is_some_and(|key| !key.trim().is_empty());
+        let (listing, search_access) = match id.listing() {
+            Listing::Catalog(_) => (ListingKind::Catalog, None),
+            Listing::Live(live) => (ListingKind::Live, Some(state.search_access(live).await)),
+        };
+
+        sources.push(SourceStatus {
+            id,
+            name: id.display_name(),
+            site_url: id.site_url(),
+            enabled: settings.enabled_sources.contains(&id),
+            listing,
+            search_access,
+            requires_api_key: id.requires_api_key(),
+            api_key_configured: id.requires_api_key() && key_saved,
+            addon_count: found.map_or(0, |catalog| catalog.addons.len()),
+            fetched_at: found.map(|catalog| catalog.fetched_at.clone()),
+            tracked_repos: match id {
+                SourceId::GitHub => settings.github_repos.clone(),
+                _ => Vec::new(),
+            },
+        });
+    }
+
     Ok(AppStatus {
         client_path: settings.client_path.clone(),
         install_valid,
         install_error,
-        sources: SourceId::ALL
-            .into_iter()
-            .map(|id| {
-                let found = catalogs.iter().find(|catalog| catalog.source == id);
-                let key_saved = match id {
-                    SourceId::CurseForge => settings.curseforge_api_key.as_deref(),
-                    SourceId::Wago => settings.wago_token.as_deref(),
-                    SourceId::GitHub => None,
-                }
-                .is_some_and(|key| !key.trim().is_empty());
-
-                SourceStatus {
-                    id,
-                    name: id.display_name(),
-                    site_url: id.site_url(),
-                    enabled: settings.enabled_sources.contains(&id),
-                    requires_api_key: id.requires_api_key(),
-                    api_key_configured: id.requires_api_key() && key_saved,
-                    addon_count: found.map_or(0, |catalog| catalog.addons.len()),
-                    fetched_at: found.map(|catalog| catalog.fetched_at.clone()),
-                    tracked_repos: match id {
-                        SourceId::GitHub => settings.github_repos.clone(),
-                        _ => Vec::new(),
-                    },
-                }
-            })
-            .collect(),
+        sources,
     })
 }
 
@@ -156,7 +175,7 @@ pub async fn remove_github_repo(state: State<'_, AppState>, repo: String) -> Res
     get_status(state).await
 }
 
-/// Pulls a source's whole listing and replaces its cached catalog.
+/// Pulls a catalog source's whole listing and replaces its cached catalog.
 ///
 /// Progress is emitted page by page; a many-page source is otherwise a long
 /// silence.
@@ -166,51 +185,144 @@ pub async fn refresh_source(
     state: State<'_, AppState>,
     source: SourceId,
 ) -> Result<AppStatus> {
+    let Listing::Catalog(catalog_source) = source.listing() else {
+        return Err(AppError::LiveSource { source_id: source });
+    };
+
     let auth = state.source_auth().await;
     let addons = state
         .sources()
-        .fetch_catalog(source, &auth, &move |progress| {
+        .fetch_catalog(catalog_source, &auth, &move |progress| {
             let _ = app.emit(CATALOG_PROGRESS_EVENT, progress);
         })
         .await?;
 
-    state.store_catalog(Catalog::new(source, addons)).await?;
+    state
+        .store_catalog(Catalog::new(catalog_source, addons))
+        .await?;
     get_status(state).await
 }
 
+/// The browse list: cached catalogs matched locally, plus each enabled live
+/// source queried now.
+///
+/// A live source that fails becomes a notice rather than an error, so one
+/// unreachable source does not blank the others' results. Only a source that
+/// answered is counted as searched.
 #[tauri::command]
-pub async fn search_catalog(
+pub async fn search_addons(
     state: State<'_, AppState>,
     query: CatalogQuery,
-) -> Result<Vec<AddonSummary>> {
-    Ok(catalog::search(
-        state.enabled_catalogs().await.iter(),
-        &query,
-    ))
+) -> Result<SearchResults> {
+    let catalogs = state.enabled_catalogs().await;
+    let mut searched = catalogs
+        .iter()
+        .map(|catalog| catalog.source)
+        .collect::<Vec<_>>();
+    let mut candidates = catalog::matching(catalogs.iter(), &query);
+    let mut notices = Vec::new();
+    let auth = state.source_auth().await;
+
+    for live in state.enabled_live_sources().await {
+        if !query.includes_source(live.id()) || !has_key(&auth, live) {
+            continue;
+        }
+
+        let access = state.search_access(live).await;
+        match state
+            .sources()
+            .browse_live(live, &query.text, query.sort, access, &auth)
+            .await
+        {
+            Ok(results) => {
+                state.record_search_access(live, results.access).await;
+                searched.push(live.id());
+                candidates.extend(results.addons);
+                notices.extend(results.notice.map(|message| SourceNotice {
+                    source: live.id(),
+                    message,
+                }));
+            }
+            Err(err) => notices.push(SourceNotice {
+                source: live.id(),
+                message: err.to_string(),
+            }),
+        }
+    }
+
+    Ok(catalog::assemble(candidates, &searched, &query, notices))
 }
 
-#[tauri::command]
-pub async fn list_categories(state: State<'_, AppState>) -> Result<Vec<String>> {
-    Ok(catalog::categories(state.enabled_catalogs().await.iter()))
+/// A live source without a key is skipped quietly; the Sources screen already
+/// says the key is missing.
+fn has_key(auth: &crate::source::SourceAuth, source: LiveSource) -> bool {
+    let key = match source {
+        LiveSource::CurseForge => auth.curseforge_api_key.as_deref(),
+    };
+
+    key.is_some_and(|key| !key.trim().is_empty())
 }
 
 #[tauri::command]
 pub async fn get_addon_detail(state: State<'_, AppState>, id: AddonId) -> Result<AddonDetail> {
-    let summary = find_in_catalog(&state, &id).await?;
     let auth = state.source_auth().await;
-    state.sources().fetch_detail(&summary, &auth).await
+    match id.source.listing() {
+        Listing::Catalog(source) => {
+            let summary = find_in_catalog(&state, &id).await?;
+            state.sources().fetch_detail(source, &summary, &auth).await
+        }
+        Listing::Live(source) => {
+            state
+                .sources()
+                .fetch_live_detail(source, &id.key, &auth)
+                .await
+        }
+    }
 }
 
 #[tauri::command]
 pub async fn list_installed(state: State<'_, AppState>) -> Result<InstalledView> {
     let install = state.wow_install().await?;
     let scanned = wow::scan_addons_dir(&install.addons_dir())?;
+    let manifest = state.manifest().await;
 
-    Ok(view::build(
-        scanned,
-        &state.manifest().await,
-        state.all_catalogs().await.iter(),
-    ))
+    let mut published = state
+        .all_catalogs()
+        .await
+        .into_iter()
+        .flat_map(|catalog| catalog.addons)
+        .collect::<Vec<_>>();
+    published.extend(live_installed(&state, &manifest).await);
+
+    Ok(view::build(scanned, &manifest, &published))
+}
+
+/// Installed addons from live sources, looked up in one request per source
+/// so their update status is current. A failed lookup leaves the status
+/// unknown rather than failing the whole list.
+async fn live_installed(
+    state: &State<'_, AppState>,
+    manifest: &install::manifest::Manifest,
+) -> Vec<AddonSummary> {
+    let auth = state.source_auth().await;
+    let mut found = Vec::new();
+
+    for live in LiveSource::ALL {
+        let keys = manifest
+            .records()
+            .filter(|record| record.id.source == live.id())
+            .map(|record| record.id.key.clone())
+            .collect::<Vec<AddonKey>>();
+        if keys.is_empty() || !has_key(&auth, live) {
+            continue;
+        }
+
+        if let Ok(addons) = state.sources().lookup_live_many(live, &keys, &auth).await {
+            found.extend(addons);
+        }
+    }
+
+    found
 }
 
 /// Installs or upgrades one addon, then re-reads the installed view so the UI
@@ -222,8 +334,11 @@ pub async fn install_addon(
     id: AddonId,
 ) -> Result<InstalledView> {
     let install = state.wow_install().await?;
-    let summary = find_in_catalog(&state, &id).await?;
     let auth = state.source_auth().await;
+    let summary = match id.source.listing() {
+        Listing::Catalog(_) => find_in_catalog(&state, &id).await?,
+        Listing::Live(source) => state.sources().lookup_live(source, &id.key, &auth).await?,
+    };
     let previously_installed = state
         .manifest()
         .await

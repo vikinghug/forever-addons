@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import type { AppStatus, SourceId, SourceStatus } from "../types";
+import type { AppStatus, SearchAccess, SourceId, SourceStatus } from "../types";
 import { when } from "../format";
 
 interface Props {
@@ -29,8 +29,9 @@ export function Sources({
   return (
     <div className="source-list">
       <p className="prose">
-        Pulling a source caches its whole catalog on disk; nothing is fetched again until you
-        refresh it here.
+        Wago and GitHub catalogs are pulled on demand and cached on disk; nothing is fetched
+        again until you refresh them here. CurseForge's terms forbid caching, so it is searched
+        live as you browse and nothing it returns is stored.
       </p>
 
       {status.sources.map((source) => (
@@ -71,6 +72,7 @@ function SourceCard({
 }) {
   const needsKey = source.requires_api_key && !source.api_key_configured;
   const isGithub = source.id === "github";
+  const isLive = source.listing === "live";
   const nothingToPull = isGithub && source.tracked_repos.length === 0;
 
   return (
@@ -78,8 +80,19 @@ function SourceCard({
       <div>
         <h3 className="source-name">{source.name}</h3>
         <div className="source-meta">
-          <span>{source.addon_count.toLocaleString()} addons</span>
-          <span>pulled {when(source.fetched_at)}</span>
+          {isLive ? (
+            <>
+              <span>searched live · nothing cached</span>
+              {source.api_key_configured && source.search_access && (
+                <SearchTag access={source.search_access} />
+              )}
+            </>
+          ) : (
+            <>
+              <span>{source.addon_count.toLocaleString()} addons</span>
+              <span>pulled {when(source.fetched_at)}</span>
+            </>
+          )}
           <button type="button" className="link" onClick={() => onOpen(source.site_url)}>
             {new URL(source.site_url).host}
           </button>
@@ -101,25 +114,47 @@ function SourceCard({
           />
           Show in browse
         </label>
-        <button
-          type="button"
-          className="btn"
-          data-variant={source.fetched_at ? undefined : "primary"}
-          disabled={refreshing !== null || needsKey || nothingToPull}
-          title={
-            needsKey
-              ? `Add your ${source.name} key first`
-              : nothingToPull
-                ? "Track a repository first"
-                : undefined
-          }
-          onClick={() => onRefresh(source.id)}
-        >
-          {refreshing === source.id ? "Pulling…" : source.fetched_at ? "Refresh" : "Pull catalog"}
-        </button>
+        {!isLive && (
+          <button
+            type="button"
+            className="btn"
+            data-variant={source.fetched_at ? undefined : "primary"}
+            disabled={refreshing !== null || needsKey || nothingToPull}
+            title={
+              needsKey
+                ? `Add your ${source.name} key first`
+                : nothingToPull
+                  ? "Track a repository first"
+                  : undefined
+            }
+            onClick={() => onRefresh(source.id)}
+          >
+            {refreshing === source.id ? "Pulling…" : source.fetched_at ? "Refresh" : "Pull catalog"}
+          </button>
+        )}
       </div>
     </div>
   );
+}
+
+/** CurseForge grants search per key; a key without it only reaches the featured lists. */
+function SearchTag({ access }: { access: SearchAccess }) {
+  switch (access) {
+    case "allowed":
+      return <span className="tag" data-tone="moss">search enabled</span>;
+    case "forbidden":
+      return (
+        <span
+          className="tag"
+          data-tone="rust"
+          title="Browse falls back to CurseForge's featured lists; a project ID still works."
+        >
+          search not enabled for this key
+        </span>
+      );
+    case "untested":
+      return <span className="tag" data-tone="mute">search untested</span>;
+  }
 }
 
 /** CurseForge and Wago only answer with a personal key/token. */
@@ -133,7 +168,7 @@ function ApiKeyField({
   const [draft, setDraft] = useState("");
   const noun = source.id === "wago" ? "access token" : "API key";
   const from =
-    source.id === "wago" ? "addons.wago.io account settings" : "console.curseforge.com";
+    source.id === "wago" ? "addons.wago.io/patreon" : "console.curseforge.com";
 
   const save = () => {
     const trimmed = draft.trim();

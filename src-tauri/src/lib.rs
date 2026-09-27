@@ -25,6 +25,10 @@ pub fn run() {
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // Restores the window's size, position, and maximized state on
+        // launch and saves them on close. Native Wayland ignores the saved
+        // position; only X11/XWayland or a compositor rule can place it.
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             app.manage(AppState::load(data_dir)?);
@@ -40,8 +44,7 @@ pub fn run() {
             commands::add_github_repo,
             commands::remove_github_repo,
             commands::refresh_source,
-            commands::search_catalog,
-            commands::list_categories,
+            commands::search_addons,
             commands::get_addon_detail,
             commands::list_installed,
             commands::install_addon,

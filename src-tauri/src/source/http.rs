@@ -98,6 +98,34 @@ impl HttpClient {
         })
     }
 
+    /// A JSON POST carrying extra request headers — CurseForge's featured and
+    /// bulk-lookup endpoints take their query as a body.
+    pub async fn post_json_authed(
+        &self,
+        source: SourceId,
+        url: &str,
+        headers: &[(&str, &str)],
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let mut request = self.inner.post(url).json(body);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+
+        let response = self.send(source, request, url).await?;
+        let text = response
+            .text()
+            .await
+            .map_err(|err| request_failed(source, url, &err))?;
+
+        serde_json::from_str(&text).map_err(|err| AppError::SourceShape {
+            source_id: source,
+            url: url.to_owned(),
+            expected: "a JSON body",
+            reason: err.to_string(),
+        })
+    }
+
     pub async fn post_form(
         &self,
         source: SourceId,

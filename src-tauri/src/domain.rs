@@ -4,11 +4,13 @@
 pub mod addon;
 pub mod expansion;
 pub mod folder;
+pub mod sort;
 pub mod source_id;
 pub mod version;
 
-pub use addon::{AddonDetail, AddonId, AddonKey, AddonSummary, Download, Screenshot};
+pub use addon::{AddonDetail, AddonId, AddonKey, AddonSummary, Description, Download, Screenshot};
 pub use expansion::Expansion;
 pub use folder::{AddonFolder, FolderNameError};
-pub use source_id::SourceId;
+pub use sort::{Sort, SortDirection, SortField};
+pub use source_id::{CatalogSource, Listing, LiveSource, SourceId};
 pub use version::AddonVersion;

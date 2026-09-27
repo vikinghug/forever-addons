@@ -1,9 +1,10 @@
 // A stand-in backend for `npm --prefix ui run dev`.
 //
 // The fixtures are shaped like real CurseForge, Wago, and GitHub metadata, so
-// the browse list looks like the one the desktop app renders. State lives in
-// module scope: installing something here changes the mock's world until
-// reload.
+// the browse list looks like the one the desktop app renders. CurseForge is
+// live in the real app; here its rows sit in the same fixture list and are
+// answered as if CurseForge had just returned them. State lives in module
+// scope: installing something here changes the mock's world until reload.
 
 import type {
   AddonDetail,
@@ -11,8 +12,11 @@ import type {
   AddonSummary,
   AppStatus,
   CatalogQuery,
+  Description,
   InstalledView,
   ManagedAddon,
+  SearchResults,
+  Sort,
   SourceId,
 } from "./types";
 import { addonKey } from "./types";
@@ -89,14 +93,31 @@ const CATALOG: AddonSummary[] = [
     [], 1_040, "v1.4.0", "2026-09-18T12:00:00Z"),
 ];
 
-const DESCRIPTIONS: Record<string, string> = {
-  "curseforge:1032100":
-    "Questie Forever tracks quest objectives, availability, and turn-ins on " +
-    "the world map and minimap, using Forever's own quest database.",
-  "wago:qN5mGYzr":
-    "ForeverAuras displays buffs, debuffs, cooldowns, and any other condition " +
-    "you can express, as icons, bars, or text anywhere on screen — within " +
-    "Forever's addon restrictions.",
+const DESCRIPTIONS: Record<string, Description> = {
+  "curseforge:1032100": {
+    format: "html",
+    text: `<h1>Questie Forever</h1>
+<p>&nbsp;</p>
+<p>Questie Forever tracks quest <strong>objectives</strong>, <em>availability</em>, and turn-ins
+on the world map and minimap, using Forever's own quest database.</p>
+<h2>Download</h2>
+<p>We suggest the <a href="/linkout?remoteUrl=https%253a%252f%252fcurseforge.overwolf.com%252f">CurseForge Client</a>,
+or the <a href="https://github.com/Questie/Questie/releases/latest">latest GitHub release</a>.</p>
+<h2>Information</h2>
+<ul>
+<li><a href="/wow/addons/questie/pages/faq">Frequently Asked Questions</a></li>
+<li>Type <code>/questie</code> to open the options.</li>
+<li><span style="color:#808080;font-size:18px">Inline styles are stripped.</span></li>
+</ul>
+<script>alert("never runs")</script>`,
+  },
+  "wago:qN5mGYzr": {
+    format: "plain",
+    text:
+      "ForeverAuras displays buffs, debuffs, cooldowns, and any other condition " +
+      "you can express, as icons, bars, or text anywhere on screen — within " +
+      "Forever's addon restrictions.",
+  },
 };
 
 let status: AppStatus = {
@@ -106,13 +127,16 @@ let status: AppStatus = {
   sources: [
     { id: "curseforge", name: "CurseForge",
       site_url: "https://www.curseforge.com/wow/search?class=addons&gameVersionTypeId=88568",
-      enabled: true, requires_api_key: true, api_key_configured: true,
-      addon_count: 898, fetched_at: "2026-09-20T18:00:00Z", tracked_repos: [] },
+      enabled: true, listing: "live", search_access: "allowed",
+      requires_api_key: true, api_key_configured: true,
+      addon_count: 0, fetched_at: null, tracked_repos: [] },
     { id: "wago", name: "Wago Addons", site_url: "https://addons.wago.io/",
-      enabled: true, requires_api_key: true, api_key_configured: false,
+      enabled: true, listing: "catalog", search_access: null,
+      requires_api_key: true, api_key_configured: false,
       addon_count: 0, fetched_at: null, tracked_repos: [] },
     { id: "github", name: "GitHub", site_url: "https://github.com/",
-      enabled: true, requires_api_key: false, api_key_configured: false,
+      enabled: true, listing: "catalog", search_access: null,
+      requires_api_key: false, api_key_configured: false,
       addon_count: 1, fetched_at: "2026-09-20T18:00:00Z",
       tracked_repos: ["RevoltLive85/ForeverGuide"] },
   ],
@@ -229,6 +253,10 @@ export function removeGithubRepo(repo: string) {
 }
 
 export function refreshSource(source: SourceId) {
+  if (source === "curseforge") {
+    return Promise.reject("CurseForge is searched live and has no catalog to pull");
+  }
+
   const pulled = CATALOG.filter((addon) => addon.id.source === source).length;
   status = {
     ...status,
@@ -241,24 +269,81 @@ export function refreshSource(source: SourceId) {
   return delay(status, 900);
 }
 
-export function searchCatalog(query: CatalogQuery) {
-  const words = query.text.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const enabled = status.sources.filter((source) => source.enabled).map((source) => source.id);
+/** Mirrors `search_addons`: a live source answers only with a key saved and
+ * only when the query includes it, and a bare number is a CurseForge project
+ * ID. Facets are counted as `catalog::assemble` counts them. */
+export function searchAddons(query: CatalogQuery): Promise<SearchResults> {
+  const text = query.text.trim();
+  const words = text.toLowerCase().split(/\s+/).filter(Boolean);
+  const includes = (source: SourceId) => !query.sources || query.sources.includes(source);
+  const searched = status.sources
+    .filter((source) => source.enabled)
+    .filter((source) =>
+      source.listing === "live"
+        ? source.api_key_configured && includes(source.id)
+        : source.fetched_at !== null,
+    )
+    .map((source) => source.id);
+  const inCategory = (addon: AddonSummary) =>
+    !query.category || addon.categories.includes(query.category);
 
-  const found = CATALOG.filter((addon) => {
-    if (!enabled.includes(addon.id.source)) return false;
-    if (query.sources && !query.sources.includes(addon.id.source)) return false;
-    if (query.category && !addon.categories.includes(query.category)) return false;
+  const matches = CATALOG.filter((addon) => {
+    if (!searched.includes(addon.id.source)) return false;
+    if (/^\d+$/.test(text)) return addon.id.source === "curseforge" && addon.id.key === text;
 
     const haystack = `${addon.name} ${addon.summary} ${addon.author ?? ""}`.toLowerCase();
     return words.every((word) => haystack.includes(word));
   });
 
-  return delay([...found].sort((a, b) => (b.downloads ?? 0) - (a.downloads ?? 0)));
+  const sources = searched.map((source) => ({
+    source,
+    count: matches.filter((addon) => addon.id.source === source && inCategory(addon)).length,
+  }));
+  const included = matches.filter((addon) => includes(addon.id.source));
+  const categories = [...new Set(included.flatMap((addon) => addon.categories))]
+    .sort()
+    .map((name) => ({
+      name,
+      count: included.filter((addon) => addon.categories.includes(name)).length,
+    }));
+  const addons = included.filter(inCategory).sort(compareBy(query.sort));
+
+  return delay({ addons, text_matches: matches.length, sources, categories, notices: [] });
 }
 
-export const listCategories = () =>
-  delay([...new Set(CATALOG.flatMap((addon) => addon.categories))].sort());
+/** Mirrors `Sort::compare`: a missing value goes last in either direction,
+ * and ties fall back to name, then id. */
+function compareBy(sort: Sort) {
+  const sign = sort.direction === "ascending" ? 1 : -1;
+  const name = (addon: AddonSummary) => addon.name.toLowerCase();
+  const date = (addon: AddonSummary) => {
+    const time = addon.updated_at ? Date.parse(addon.updated_at) : NaN;
+    return Number.isNaN(time) ? null : time;
+  };
+  const key = (addon: AddonSummary): number | string | null => {
+    switch (sort.field) {
+      case "downloads":
+        return addon.downloads;
+      case "updated":
+        return date(addon);
+      case "name":
+        return name(addon);
+      case "author":
+        return addon.author?.trim().toLowerCase() || null;
+    }
+  };
+  const order = (a: number | string, b: number | string) => (a < b ? -1 : a > b ? 1 : 0);
+
+  return (a: AddonSummary, b: AddonSummary) => {
+    const [left, right] = [key(a), key(b)];
+    const byField =
+      left === null || right === null
+        ? Number(left === null) - Number(right === null)
+        : sign * order(left, right);
+
+    return byField || order(name(a), name(b)) || order(addonKey(a.id), addonKey(b.id));
+  };
+}
 
 export function getAddonDetail(id: AddonId): Promise<AddonDetail> {
   const found = CATALOG.find((addon) => addonKey(addon.id) === addonKey(id));
@@ -267,7 +352,10 @@ export function getAddonDetail(id: AddonId): Promise<AddonDetail> {
   return delay(
     {
       ...found,
-      description: DESCRIPTIONS[addonKey(id)] ?? found.summary,
+      description: DESCRIPTIONS[addonKey(id)] ?? {
+        format: "markdown",
+        text: `## Changes\n\n- Fixed the \`/guide\` command\n- Added **Forever** support\n\n> ${found.summary}`,
+      },
       website_url: "https://github.com/",
       screenshots: [],
     },

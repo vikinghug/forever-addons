@@ -1,8 +1,7 @@
 //! Projections the UI renders: what is installed, where it came from, and
 //! whether the source has something newer.
 
-use crate::catalog::Catalog;
-use crate::domain::AddonVersion;
+use crate::domain::{AddonSummary, AddonVersion};
 use crate::install::manifest::{InstalledRecord, Manifest};
 use crate::wow::InstalledFolder;
 
@@ -23,8 +22,9 @@ pub enum UpdateStatus {
     SourceChanged {
         updated_at: String,
     },
-    /// Neither signal is available: the catalog has not been refreshed, or the
-    /// source publishes neither a version nor a modification date. Saying so is
+    /// Neither signal is available: the catalog has not been refreshed, a live
+    /// lookup failed, or the source publishes neither a version nor a
+    /// modification date. Saying so is
     /// more useful than claiming an addon is current.
     Unknown,
 }
@@ -50,15 +50,16 @@ pub struct InstalledView {
     pub unmanaged: Vec<InstalledFolder>,
 }
 
-/// Joins the AddOns directory, the manifest, and the catalogs into one view.
-pub fn build<'a>(
+/// Joins the AddOns directory, the manifest, and what the sources publish now
+/// — catalog rows and live lookups alike — into one view.
+pub fn build(
     scanned: Vec<InstalledFolder>,
     manifest: &Manifest,
-    catalogs: impl IntoIterator<Item = &'a Catalog> + Clone,
+    published: &[AddonSummary],
 ) -> InstalledView {
     let managed = manifest
         .records()
-        .map(|record| managed_addon(record, &scanned, catalogs.clone()))
+        .map(|record| managed_addon(record, &scanned, published))
         .collect::<Vec<_>>();
 
     let unmanaged = scanned
@@ -69,10 +70,10 @@ pub fn build<'a>(
     InstalledView { managed, unmanaged }
 }
 
-fn managed_addon<'a>(
+fn managed_addon(
     record: &InstalledRecord,
     scanned: &[InstalledFolder],
-    catalogs: impl IntoIterator<Item = &'a Catalog>,
+    published: &[AddonSummary],
 ) -> ManagedAddon {
     let folders = scanned
         .iter()
@@ -85,9 +86,7 @@ fn managed_addon<'a>(
         .cloned()
         .collect::<Vec<_>>();
 
-    let published = catalogs
-        .into_iter()
-        .find_map(|catalog| catalog.find(&record.id));
+    let published = published.iter().find(|addon| addon.id == record.id);
 
     ManagedAddon {
         update: update_status(
@@ -167,28 +166,29 @@ mod tests {
             .collect()
     }
 
-    fn catalog(key: &str, version: Option<&str>) -> Catalog {
+    fn catalog(key: &str, version: Option<&str>) -> Vec<AddonSummary> {
         catalog_with(key, version, None)
     }
 
-    fn catalog_with(key: &str, version: Option<&str>, updated_at: Option<&str>) -> Catalog {
-        Catalog::new(
-            SourceId::CurseForge,
-            vec![AddonSummary {
-                id: addon_id(key),
-                name: "Bagnon".to_owned(),
-                summary: String::new(),
-                author: None,
-                version: version.and_then(AddonVersion::new),
-                updated_at: updated_at.map(str::to_owned),
-                icon_url: None,
-                page_url: String::new(),
-                categories: Vec::new(),
-                downloads: None,
-                expansions: Vec::new(),
-                download: Download::Brokered,
-            }],
-        )
+    fn catalog_with(
+        key: &str,
+        version: Option<&str>,
+        updated_at: Option<&str>,
+    ) -> Vec<AddonSummary> {
+        vec![AddonSummary {
+            id: addon_id(key),
+            name: "Bagnon".to_owned(),
+            summary: String::new(),
+            author: None,
+            version: version.and_then(AddonVersion::new),
+            updated_at: updated_at.map(str::to_owned),
+            icon_url: None,
+            page_url: String::new(),
+            categories: Vec::new(),
+            downloads: None,
+            expansions: Vec::new(),
+            download: Download::Brokered,
+        }]
     }
 
     #[test]
@@ -209,8 +209,8 @@ mod tests {
         let mut manifest = Manifest::default();
         manifest.insert(record("1", Some("2.13.3"), &["Bagnon"]));
 
-        let catalogs = [catalog("1", Some("2.14.0"))];
-        let view = build(scanned(&["Bagnon"]), &manifest, catalogs.iter());
+        let published = catalog("1", Some("2.14.0"));
+        let view = build(scanned(&["Bagnon"]), &manifest, &published);
 
         assert_eq!(
             view.managed[0].update,
@@ -225,8 +225,8 @@ mod tests {
         let mut manifest = Manifest::default();
         manifest.insert(record("1", Some("v2.13.3"), &["Bagnon"]));
 
-        let catalogs = [catalog("1", Some("2.13.3"))];
-        let view = build(scanned(&["Bagnon"]), &manifest, catalogs.iter());
+        let published = catalog("1", Some("2.13.3"));
+        let view = build(scanned(&["Bagnon"]), &manifest, &published);
 
         assert_eq!(view.managed[0].update, UpdateStatus::UpToDate);
     }
@@ -236,8 +236,8 @@ mod tests {
         let mut manifest = Manifest::default();
         manifest.insert(record("1", None, &["Bagnon"]));
 
-        let catalogs = [catalog("1", Some("2.14.0"))];
-        let view = build(scanned(&["Bagnon"]), &manifest, catalogs.iter());
+        let published = catalog("1", Some("2.14.0"));
+        let view = build(scanned(&["Bagnon"]), &manifest, &published);
 
         assert_eq!(view.managed[0].update, UpdateStatus::Unknown);
     }
@@ -247,8 +247,8 @@ mod tests {
         let mut manifest = Manifest::default();
         manifest.insert(record("1", None, &["Bagnon"]));
 
-        let catalogs = [catalog_with("1", None, Some("2026-09-12T00:00:00Z"))];
-        let view = build(scanned(&["Bagnon"]), &manifest, catalogs.iter());
+        let published = catalog_with("1", None, Some("2026-09-12T00:00:00Z"));
+        let view = build(scanned(&["Bagnon"]), &manifest, &published);
 
         assert_eq!(
             view.managed[0].update,
@@ -263,8 +263,8 @@ mod tests {
         let mut manifest = Manifest::default();
         manifest.insert(record("1", None, &["Bagnon"]));
 
-        let catalogs = [catalog_with("1", None, Some("2026-08-01T00:00:00Z"))];
-        let view = build(scanned(&["Bagnon"]), &manifest, catalogs.iter());
+        let published = catalog_with("1", None, Some("2026-08-01T00:00:00Z"));
+        let view = build(scanned(&["Bagnon"]), &manifest, &published);
 
         assert_eq!(view.managed[0].update, UpdateStatus::UpToDate);
     }
@@ -274,12 +274,8 @@ mod tests {
         let mut manifest = Manifest::default();
         manifest.insert(record("1", Some("2.13.3"), &["Bagnon"]));
 
-        let catalogs = [catalog_with(
-            "1",
-            Some("2.13.3"),
-            Some("2026-09-01T00:00:00Z"),
-        )];
-        let view = build(scanned(&["Bagnon"]), &manifest, catalogs.iter());
+        let published = catalog_with("1", Some("2.13.3"), Some("2026-09-01T00:00:00Z"));
+        let view = build(scanned(&["Bagnon"]), &manifest, &published);
 
         assert_eq!(view.managed[0].update, UpdateStatus::UpToDate);
     }

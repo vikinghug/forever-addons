@@ -9,13 +9,16 @@ Forever client running under Wine.
 | Source | What it needs |
 | --- | --- |
 | **CurseForge** | An API key (`x-api-key`) — CurseForge's API has no user login. Paste yours on the Sources screen. |
-| **Wago Addons** | An access token, generated in your [Wago account settings](https://addons.wago.io/) — takes a minute. |
+| **Wago Addons** | An access token, which Wago gives to its Patreon supporters on [addons.wago.io/patreon](https://addons.wago.io/patreon). The API key in your Wago account settings is for uploading releases and does not work here. |
 | **GitHub** | Nothing. Paste `owner/repo` (or a GitHub URL) and the app tracks its releases — handy for addons that ship on GitHub before the stores. |
 
-Each source's catalog is pulled on demand and cached on disk; nothing polls in
-the background. Addons whose authors only distribute through their own pages
-stay visible in the catalog with a link, and are never fetched behind their
-backs.
+Wago and GitHub catalogs are pulled on demand and cached on disk. CurseForge
+has no catalog: its API terms forbid saving or caching API data, so it is
+queried live as you browse (its featured lists when the search box is empty,
+a search otherwise, or a direct lookup when you type a project ID), and
+nothing it returns is stored. Nothing polls in the background. Addons whose
+authors only distribute through their own pages stay visible with a link, and
+are never fetched behind their backs.
 
 ## How installs work
 

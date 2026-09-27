@@ -1,8 +1,10 @@
-//! The application's shared state: settings, manifest, and loaded catalogs.
+//! The application's shared state: settings, manifest, loaded catalogs, and
+//! what this session has learned about each live source's search access.
 //!
 //! Commands read through a read lock and write through a short write lock;
 //! network work always happens outside the lock, so a long catalog refresh
-//! never blocks the installed list from rendering.
+//! never blocks the installed list from rendering. Live sources' addons are
+//! never held here.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -11,10 +13,10 @@ use tokio::sync::RwLock;
 
 use crate::catalog::{self, Catalog};
 use crate::config::{self, Settings};
-use crate::domain::SourceId;
+use crate::domain::{CatalogSource, Listing, LiveSource, SourceId};
 use crate::error::{AppError, Result};
 use crate::install::manifest::{self, Manifest};
-use crate::source::{SourceAuth, Sources};
+use crate::source::{SearchAccess, SourceAuth, Sources};
 use crate::wow::WowInstall;
 
 pub struct AppState {
@@ -27,6 +29,8 @@ struct Inner {
     settings: Settings,
     manifest: Manifest,
     catalogs: BTreeMap<SourceId, Catalog>,
+    /// Session-only: a new key, or a restart, tests search again.
+    search_access: BTreeMap<LiveSource, SearchAccess>,
 }
 
 impl AppState {
@@ -35,10 +39,11 @@ impl AppState {
     pub fn load(data_dir: PathBuf) -> Result<Self> {
         let settings = Settings::load(&config::settings_path(&data_dir));
         let manifest = Manifest::load(&manifest::manifest_path(&data_dir));
-        let catalogs = SourceId::ALL
+        catalog::purge_live_source_caches(&data_dir)?;
+        let catalogs = CatalogSource::ALL
             .into_iter()
             .filter_map(|source| {
-                catalog::load_cached(&data_dir, source).map(|catalog| (source, catalog))
+                catalog::load_cached(&data_dir, source).map(|catalog| (source.id(), catalog))
             })
             .collect();
 
@@ -48,6 +53,7 @@ impl AppState {
                 settings,
                 manifest,
                 catalogs,
+                search_access: BTreeMap::new(),
             }),
             data_dir,
         })
@@ -105,10 +111,19 @@ impl AppState {
             .await
     }
 
-    /// Stores the CurseForge key; `None` or a blank string clears it.
+    /// Stores the CurseForge key; `None` or a blank string clears it. Either
+    /// way the new key's search access is unknown until it is tried.
     pub async fn set_curseforge_api_key(&self, key: Option<String>) -> Result<Settings> {
-        self.change_settings(|settings| settings.curseforge_api_key = normalize_secret(key))
+        let settings = self
+            .change_settings(|settings| settings.curseforge_api_key = normalize_secret(key))
+            .await?;
+        self.inner
+            .write()
             .await
+            .search_access
+            .remove(&LiveSource::CurseForge);
+
+        Ok(settings)
     }
 
     /// Stores the Wago access token; `None` or a blank string clears it.
@@ -157,6 +172,39 @@ impl AppState {
             .iter()
             .filter_map(|source| inner.catalogs.get(source).cloned())
             .collect()
+    }
+
+    /// Enabled live sources, in the order the user arranged them.
+    pub async fn enabled_live_sources(&self) -> Vec<LiveSource> {
+        self.inner
+            .read()
+            .await
+            .settings
+            .enabled_sources
+            .iter()
+            .filter_map(|source| match source.listing() {
+                Listing::Live(live) => Some(live),
+                Listing::Catalog(_) => None,
+            })
+            .collect()
+    }
+
+    pub async fn search_access(&self, source: LiveSource) -> SearchAccess {
+        self.inner
+            .read()
+            .await
+            .search_access
+            .get(&source)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub async fn record_search_access(&self, source: LiveSource, access: SearchAccess) {
+        self.inner
+            .write()
+            .await
+            .search_access
+            .insert(source, access);
     }
 
     pub async fn all_catalogs(&self) -> Vec<Catalog> {

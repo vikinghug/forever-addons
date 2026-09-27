@@ -69,6 +69,32 @@ pub enum Download {
     External { url: String },
 }
 
+/// An addon's long description in the markup its source publishes. The UI
+/// sanitizes and renders it; nothing here interprets the markup.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "format", content = "text", rename_all = "kebab-case")]
+pub enum Description {
+    Html(String),
+    Markdown(String),
+    Plain(String),
+}
+
+impl Description {
+    /// `markup` wrapped by `wrap`, or the plain `fallback` when it is blank.
+    pub fn or_plain(markup: Option<&str>, wrap: fn(String) -> Self, fallback: &str) -> Self {
+        match markup.map(str::trim).filter(|markup| !markup.is_empty()) {
+            Some(markup) => wrap(markup.to_owned()),
+            None => Self::Plain(fallback.to_owned()),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Html(text) | Self::Markdown(text) | Self::Plain(text) => text.trim().is_empty(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Screenshot {
     pub url: String,
@@ -107,6 +133,18 @@ impl AddonSummary {
             Download::Unsupported { .. } | Download::External { .. }
         )
     }
+
+    /// True when every word of `text` appears in the name, summary, or
+    /// author, ignoring case. Blank text matches everything.
+    pub fn matches_text(&self, text: &str) -> bool {
+        let name = self.name.to_lowercase();
+        let summary = self.summary.to_lowercase();
+        let author = self.author.as_deref().unwrap_or_default().to_lowercase();
+
+        text.to_lowercase()
+            .split_whitespace()
+            .all(|word| name.contains(word) || summary.contains(word) || author.contains(word))
+    }
 }
 
 /// A catalog row plus the fields that require visiting the addon's own page.
@@ -114,7 +152,7 @@ impl AddonSummary {
 pub struct AddonDetail {
     #[serde(flatten)]
     pub summary: AddonSummary,
-    pub description: String,
+    pub description: Description,
     pub website_url: Option<String>,
     pub screenshots: Vec<Screenshot>,
 }
@@ -173,5 +211,23 @@ mod tests {
         };
 
         assert!(!addon.is_installable());
+    }
+
+    #[test]
+    fn a_blank_description_falls_back_to_the_plain_summary() {
+        for markup in [None, Some(""), Some("  \n ")] {
+            assert_eq!(
+                Description::or_plain(markup, Description::Html, "A quest helper."),
+                Description::Plain("A quest helper.".to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn description_markup_is_kept_in_its_source_format() {
+        assert_eq!(
+            Description::or_plain(Some(" ## Changes "), Description::Markdown, "unused"),
+            Description::Markdown("## Changes".to_owned())
+        );
     }
 }

@@ -11,7 +11,9 @@
 //! an explicitly unsupported download rather than guessing at the source
 //! archive, whose root folder is named after the commit and would never load.
 
-use crate::domain::{AddonDetail, AddonSummary, Download, Expansion, Screenshot, SourceId};
+use crate::domain::{
+    AddonDetail, AddonSummary, Description, Download, Expansion, Screenshot, SourceId,
+};
 use crate::error::{AppError, Result};
 use crate::source::http::HttpClient;
 use crate::source::{FetchProgress, addon_id, missing_field};
@@ -127,12 +129,11 @@ pub(super) async fn fetch_detail(http: &HttpClient, summary: &AddonSummary) -> R
 
     let releases = fetch_releases(http, &slug).await?;
     let release = best_release(&releases);
-    let description = release
-        .and_then(|release| release.body.as_deref())
-        .map(str::trim)
-        .filter(|body| !body.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| summary.summary.clone());
+    let description = Description::or_plain(
+        release.and_then(|release| release.body.as_deref()),
+        Description::Markdown,
+        &summary.summary,
+    );
 
     Ok(AddonDetail {
         description,

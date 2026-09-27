@@ -6,13 +6,13 @@
 
 import type {
   AddonDetail,
-  AddonSummary,
   AddonId,
   AppStatus,
   CatalogQuery,
   FetchProgress,
   InstallProgress,
   InstalledView,
+  SearchResults,
   SourceId,
 } from "./types";
 import * as mock from "./mock";
@@ -52,11 +52,8 @@ export const api = {
   refreshSource: (source: SourceId): Promise<AppStatus> =>
     isDesktop ? call("refresh_source", { source }) : mock.refreshSource(source),
 
-  searchCatalog: (query: CatalogQuery): Promise<AddonSummary[]> =>
-    isDesktop ? call("search_catalog", { query }) : mock.searchCatalog(query),
-
-  listCategories: (): Promise<string[]> =>
-    isDesktop ? call("list_categories") : mock.listCategories(),
+  searchAddons: (query: CatalogQuery): Promise<SearchResults> =>
+    isDesktop ? call("search_addons", { query }) : mock.searchAddons(query),
 
   getAddonDetail: (id: AddonId): Promise<AddonDetail> =>
     isDesktop ? call("get_addon_detail", { id }) : mock.getAddonDetail(id),

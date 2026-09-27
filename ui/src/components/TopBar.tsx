@@ -11,7 +11,7 @@ interface Props {
   onChooseFolder: () => void;
 }
 
-export function Rail({
+export function TopBar({
   view,
   status,
   catalogCount,
@@ -23,53 +23,51 @@ export function Rail({
   const path = status?.client_path ?? null;
 
   return (
-    <nav className="rail">
+    <header className="topbar">
       <div className="brand">
         <span className="brand-mark" aria-hidden="true">∞</span>
         <span className="brand-name">Forever Addons</span>
       </div>
 
-      <div className="nav">
-        <NavItem
+      <nav className="tabs">
+        <Tab
           label="Browse"
           count={catalogCount}
           current={view === "browse"}
           onClick={() => onNavigate("browse")}
         />
-        <NavItem
+        <Tab
           label="Installed"
           count={installedCount}
           current={view === "installed"}
           onClick={() => onNavigate("installed")}
         />
-        <NavItem
+        <Tab
           label="Sources"
           count={enabledSources}
           current={view === "sources"}
           onClick={() => onNavigate("sources")}
         />
-      </div>
+      </nav>
 
-      <div className="rail-foot">
+      <div className="client">
         <span className="label">Client</span>
-        <div className="client-card">
-          <span className="brand-client">World of Warcraft: Forever</span>
-          <span className="client-path" data-state={path ? "set" : "unset"}>
-            {path ?? "No folder chosen yet"}
-          </span>
-          {status && !status.install_valid && path && (
-            <span className="tag" data-tone="rust">Not a client folder</span>
-          )}
-          <button type="button" className="btn" onClick={onChooseFolder}>
-            {path ? "Change folder" : "Choose folder"}
-          </button>
-        </div>
+        {/* Long paths are cut from the left: the folder name is the part that tells installs apart. */}
+        <span className="client-path" data-state={path ? "set" : "unset"} title={path ?? undefined}>
+          <bdi>{path ?? "No folder chosen yet"}</bdi>
+        </span>
+        {status && !status.install_valid && path && (
+          <span className="tag" data-tone="rust">Not a client folder</span>
+        )}
+        <button type="button" className="btn" onClick={onChooseFolder}>
+          {path ? "Change folder" : "Choose folder"}
+        </button>
       </div>
-    </nav>
+    </header>
   );
 }
 
-function NavItem({
+function Tab({
   label,
   count,
   current,
@@ -81,9 +79,9 @@ function NavItem({
   onClick: () => void;
 }) {
   return (
-    <button type="button" className="nav-item" aria-current={current} onClick={onClick}>
+    <button type="button" className="tab" aria-current={current} onClick={onClick}>
       <span>{label}</span>
-      <span className="nav-count">{count}</span>
+      <span className="tab-count">{count}</span>
     </button>
   );
 }

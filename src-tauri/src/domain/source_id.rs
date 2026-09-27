@@ -47,6 +47,15 @@ impl SourceId {
         }
     }
 
+    /// How this source's addons reach the browse list.
+    pub const fn listing(self) -> Listing {
+        match self {
+            Self::CurseForge => Listing::Live(LiveSource::CurseForge),
+            Self::Wago => Listing::Catalog(CatalogSource::Wago),
+            Self::GitHub => Listing::Catalog(CatalogSource::GitHub),
+        }
+    }
+
     /// True for sources that cannot be queried without a user-supplied key.
     pub const fn requires_api_key(self) -> bool {
         match self {
@@ -57,6 +66,51 @@ impl SourceId {
 
     pub fn from_slug(slug: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|source| source.slug() == slug)
+    }
+}
+
+/// The two ways a source can be browsed. Splitting the sources this way lets
+/// the compiler refuse a catalog pull for a source whose terms forbid one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Listing {
+    /// Pulled whole on demand and cached on disk.
+    Catalog(CatalogSource),
+    /// Queried each time the browse list changes; nothing is kept.
+    Live(LiveSource),
+}
+
+/// A source whose whole listing is pulled and cached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum CatalogSource {
+    Wago,
+    GitHub,
+}
+
+impl CatalogSource {
+    pub const ALL: [Self; 2] = [Self::Wago, Self::GitHub];
+
+    pub const fn id(self) -> SourceId {
+        match self {
+            Self::Wago => SourceId::Wago,
+            Self::GitHub => SourceId::GitHub,
+        }
+    }
+}
+
+/// A source queried live. CurseForge is one because its API terms forbid
+/// saving or caching data obtained through the API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum LiveSource {
+    CurseForge,
+}
+
+impl LiveSource {
+    pub const ALL: [Self; 1] = [Self::CurseForge];
+
+    pub const fn id(self) -> SourceId {
+        match self {
+            Self::CurseForge => SourceId::CurseForge,
+        }
     }
 }
 
@@ -75,6 +129,25 @@ mod tests {
         for source in SourceId::ALL {
             assert_eq!(SourceId::from_slug(source.slug()), Some(source));
         }
+    }
+
+    #[test]
+    fn every_source_round_trips_through_its_listing() {
+        for source in SourceId::ALL {
+            let back = match source.listing() {
+                Listing::Catalog(catalog) => catalog.id(),
+                Listing::Live(live) => live.id(),
+            };
+            assert_eq!(back, source);
+        }
+    }
+
+    #[test]
+    fn curseforge_is_never_a_catalog_source() {
+        assert_eq!(
+            SourceId::CurseForge.listing(),
+            Listing::Live(LiveSource::CurseForge)
+        );
     }
 
     #[test]

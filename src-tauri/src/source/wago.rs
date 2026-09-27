@@ -2,8 +2,9 @@
 //! Forever addons.
 //!
 //! Wago's external API (the one WowUp and instawow use) authenticates with a
-//! personal access token that any Wago account can generate in its settings —
-//! self-serve, unlike CurseForge's reviewed application. The API has no
+//! personal access token that Wago gives its Patreon supporters on
+//! <https://addons.wago.io/patreon>. The upload API key in Wago's account
+//! settings is a different credential and is rejected here. The API has no
 //! "list everything" endpoint, so the catalog is the `popular` listing for the
 //! Forever game version.
 //!
@@ -12,10 +13,12 @@
 
 use std::collections::BTreeMap;
 
-use crate::domain::{AddonDetail, AddonSummary, Download, Expansion, Screenshot, SourceId};
+use crate::domain::{
+    AddonDetail, AddonSummary, Description, Download, Expansion, Screenshot, SourceId,
+};
 use crate::error::{AppError, Result};
 use crate::source::http::HttpClient;
-use crate::source::{FetchProgress, addon_id, html_to_text, missing_field};
+use crate::source::{FetchProgress, addon_id, missing_field};
 
 const SOURCE: SourceId = SourceId::Wago;
 const API: &str = "https://addons.wago.io/api/external";
@@ -117,9 +120,11 @@ pub(super) async fn fetch_detail(
     let document = fetch_document(http, token, summary).await?;
 
     Ok(AddonDetail {
-        description: html_to_text(&document.description)
-            .filter(|text| !text.is_empty())
-            .unwrap_or_else(|| summary.summary.clone()),
+        description: Description::or_plain(
+            Some(&document.description),
+            Description::Html,
+            &summary.summary,
+        ),
         website_url: non_empty(&document.website),
         screenshots: document
             .gallery

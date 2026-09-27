@@ -40,6 +40,9 @@ pub enum AppError {
     #[error("{source_id} needs an API key before it can be queried; add one on the Sources screen")]
     MissingApiKey { source_id: SourceId },
 
+    #[error("{source_id} is searched live and has no catalog to pull")]
+    LiveSource { source_id: SourceId },
+
     #[error("{addon_id} offers no download for World of Warcraft: Forever")]
     NoForeverDownload { addon_id: AddonId },
 

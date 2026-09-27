@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   api,
@@ -12,29 +12,52 @@ import type {
   AddonId,
   AddonSummary,
   AppStatus,
+  BrowseQuery,
   InstalledView,
+  SearchResults,
   SourceId,
+  SourceStatus,
 } from "./types";
-import { addonKey } from "./types";
+import { DEFAULT_SORT, addonKey } from "./types";
 import { bytes } from "./format";
 import { Browse, stateOf } from "./components/Browse";
-import { DetailDrawer } from "./components/DetailDrawer";
+import { DetailPane } from "./components/DetailPane";
 import { Installed } from "./components/Installed";
 import { ProgressBar } from "./components/ProgressBar";
-import { Rail, type View } from "./components/Rail";
 import { Sources } from "./components/Sources";
+import { TopBar, type View } from "./components/TopBar";
 
 const EMPTY_INSTALLED: InstalledView = { managed: [], unmanaged: [] };
+
+const EMPTY_RESULTS: SearchResults = {
+  addons: [],
+  text_matches: 0,
+  sources: [],
+  categories: [],
+  notices: [],
+};
+
+const DEFAULT_QUERY: BrowseQuery = {
+  text: "",
+  category: null,
+  sources: null,
+  sort: DEFAULT_SORT,
+  hideInstalled: false,
+};
+
+/** A live source answers once its key is saved; a catalog source once pulled. */
+const isBrowsable = (source: SourceStatus) =>
+  source.listing === "live"
+    ? source.enabled && source.api_key_configured
+    : source.fetched_at !== null;
 
 export default function App() {
   const [view, setView] = useState<View>("browse");
   const [status, setStatus] = useState<AppStatus | null>(null);
-  const [catalog, setCatalog] = useState<AddonSummary[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
+  const [results, setResults] = useState<SearchResults>(EMPTY_RESULTS);
   const [installed, setInstalled] = useState<InstalledView>(EMPTY_INSTALLED);
 
-  const [text, setText] = useState("");
-  const [category, setCategory] = useState("");
+  const [query, setQuery] = useState<BrowseQuery>(DEFAULT_QUERY);
   const [searching, setSearching] = useState(true);
 
   const [selected, setSelected] = useState<AddonSummary | null>(null);
@@ -47,7 +70,15 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
 
   const canInstall = status?.install_valid ?? false;
-  const hasCatalog = (status?.sources ?? []).some((source) => source.fetched_at !== null);
+  const browsable = (status?.sources ?? []).filter(isBrowsable);
+
+  // What a search depends on. A status change that only records a live
+  // source's search access must not trigger another search.
+  const searchInputs = (status?.sources ?? [])
+    .map((source) =>
+      [source.id, source.enabled, source.api_key_configured, source.fetched_at].join(":"),
+    )
+    .join("|");
 
   // --- loading ------------------------------------------------------------
 
@@ -71,32 +102,47 @@ export default function App() {
     void reloadInstalled();
   }, [reloadInstalled]);
 
-  useEffect(() => {
-    api.listCategories().then(setCategories).catch(() => setCategories([]));
-  }, [status]);
+  // The picked sources that can still answer, as a string so an unchanged
+  // pick does not search again. Empty means every source.
+  const sourceFilter = (query.sources ?? [])
+    .filter((id) => browsable.some((source) => source.id === id))
+    .join(",");
 
-  // Searching is debounced so typing does not re-query the catalog per keypress.
+  // Searching is debounced so typing does not query CurseForge per keypress,
+  // and numbered so a slow answer to an older query cannot replace a newer one.
+  const searchSeq = useRef(0);
+
   useEffect(() => {
     setSearching(true);
+    const seq = ++searchSeq.current;
     const timer = window.setTimeout(async () => {
       try {
-        setCatalog(
-          await api.searchCatalog({
-            text,
-            category: category || null,
-            sources: null,
-          }),
-        );
+        const found = await api.searchAddons({
+          text: query.text,
+          category: query.category,
+          sources: sourceFilter ? (sourceFilter.split(",") as SourceId[]) : null,
+          sort: query.sort,
+        });
+        if (seq !== searchSeq.current) return;
+        setResults(found);
         setError(null);
       } catch (cause) {
-        setError(messageOf(cause));
+        if (seq === searchSeq.current) setError(messageOf(cause));
       } finally {
-        setSearching(false);
+        if (seq === searchSeq.current) setSearching(false);
       }
-    }, 180);
+    }, 350);
 
     return () => window.clearTimeout(timer);
-  }, [text, category, status]);
+  }, [query.text, query.category, sourceFilter, query.sort, searchInputs]);
+
+  // The Sources screen shows what browsing learned about search access.
+  const navigate = (next: View) => {
+    setView(next);
+    if (next === "sources") {
+      api.getStatus().then(setStatus).catch((cause) => setError(messageOf(cause)));
+    }
+  };
 
   // --- live progress ------------------------------------------------------
 
@@ -232,146 +278,99 @@ export default function App() {
     api.openUrl(url).catch((cause) => setError(messageOf(cause)));
   };
 
-  const title = useMemo(() => {
-    if (view === "browse") return "Browse addons";
-    if (view === "installed") return "Installed addons";
-    return "Addon sources";
-  }, [view]);
-
   return (
-    <div className="shell" data-drawer={selected ? "open" : "closed"}>
-      <Rail
+    <div className="shell">
+      <TopBar
         view={view}
         status={status}
-        catalogCount={catalog.length}
+        catalogCount={results.addons.length}
         installedCount={installed.managed.length + installed.unmanaged.length}
-        onNavigate={setView}
+        onNavigate={navigate}
         onChooseFolder={pickFolder}
       />
 
-      <main className="main">
-        <div className="toolbar">
-          <h1 className="view-title">{title}</h1>
-
-          {view === "browse" && (
-            <>
-              <div className="field">
-                <span className="field-icon" aria-hidden="true">⌕</span>
-                <input
-                  type="search"
-                  value={text}
-                  placeholder="Search by name, author, or description"
-                  aria-label="Search addons"
-                  onChange={(event) => setText(event.target.value)}
-                />
-              </div>
-              <select
-                value={category}
-                aria-label="Filter by category"
-                onChange={(event) => setCategory(event.target.value)}
-              >
-                <option value="">All categories</option>
-                {categories.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
-            </>
-          )}
-
+      {status && !status.install_valid && (
+        <div className="banner">
+          <span className="banner-dot" aria-hidden="true">●</span>
+          <span>
+            {status.install_error ??
+              "Choose your WoW Forever folder to install anything."}
+          </span>
           <span className="toolbar-spacer" />
-
-          {view === "browse" && (
-            <span className="result-count">
-              {searching ? "searching…" : `${catalog.length} shown`}
-            </span>
-          )}
+          <button type="button" className="btn" onClick={pickFolder}>
+            Choose folder
+          </button>
         </div>
+      )}
 
-        {status && !status.install_valid && (
-          <div className="banner">
-            <span className="banner-dot" aria-hidden="true">●</span>
-            <span>
-              {status.install_error ??
-                "Choose your WoW Forever folder to install anything."}
-            </span>
-            <span className="toolbar-spacer" />
-            <button type="button" className="btn" onClick={pickFolder}>
-              Choose folder
-            </button>
-          </div>
-        )}
-
-        {error && (
-          <div className="banner">
-            <span className="banner-dot" aria-hidden="true">●</span>
-            <span>{error}</span>
-            <span className="toolbar-spacer" />
-            <button type="button" className="btn" data-variant="quiet" onClick={() => setError(null)}>
-              Dismiss
-            </button>
-          </div>
-        )}
-
-        {pull && <ProgressBar label={`Pulling catalog · ${pull}`} fraction={null} />}
-
-        <div className="scroller">
-          {view === "browse" && (
-            <Browse
-              addons={catalog}
-              installed={installed}
-              selected={selected ? addonKey(selected.id) : null}
-              busy={busy}
-              canInstall={canInstall}
-              loading={searching}
-              hasCatalog={hasCatalog}
-              onSelect={openDetail}
-              onInstall={(addon) => install(addon.id)}
-              onRemove={(addon) => remove(addon.id)}
-              onGoToSources={() => setView("sources")}
-            />
-          )}
-
-          {view === "installed" && (
-            <Installed
-              installed={installed}
-              busy={busy}
-              onUpdate={(addon) => install(addon.id)}
-              onRemove={(addon) => remove(addon.id)}
-              onOpen={openUrl}
-              onGoToBrowse={() => setView("browse")}
-            />
-          )}
-
-          {view === "sources" && (
-            <Sources
-              status={status}
-              refreshing={refreshing}
-              onRefresh={refresh}
-              onToggle={toggleSource}
-              onOpen={openUrl}
-              onSaveApiKey={saveApiKey}
-              onAddRepo={addRepo}
-              onRemoveRepo={removeRepo}
-            />
-          )}
+      {error && (
+        <div className="banner">
+          <span className="banner-dot" aria-hidden="true">●</span>
+          <span>{error}</span>
+          <span className="toolbar-spacer" />
+          <button type="button" className="btn" data-variant="quiet" onClick={() => setError(null)}>
+            Dismiss
+          </button>
         </div>
-      </main>
+      )}
 
-      {selected && (
-        <DetailDrawer
-          detail={detail}
-          loading={detail === null && detailError === null}
-          error={detailError}
-          state={stateOf(selected, installed)}
-          busy={busy[addonKey(selected.id)] ?? null}
-          canInstall={canInstall}
-          onClose={() => setSelected(null)}
-          onOpen={openUrl}
-          onInstall={() => install(selected.id)}
-          onRemove={() => remove(selected.id)}
-        />
+      {pull && <ProgressBar label={`Pulling catalog · ${pull}`} fraction={null} />}
+
+      {view === "browse" && (
+        <main className="browse">
+          <Browse
+            results={results}
+            browsable={browsable}
+            query={query}
+            installed={installed}
+            selected={selected ? addonKey(selected.id) : null}
+            busy={busy}
+            loading={searching}
+            onQuery={(change) => setQuery((current) => ({ ...current, ...change }))}
+            onSelect={openDetail}
+            onGoToSources={() => navigate("sources")}
+          />
+          <DetailPane
+            addon={selected}
+            detail={detail}
+            error={detailError}
+            state={selected ? stateOf(selected, installed) : "none"}
+            busy={selected ? (busy[addonKey(selected.id)] ?? null) : null}
+            canInstall={canInstall}
+            onClose={() => setSelected(null)}
+            onOpen={openUrl}
+            onInstall={() => selected && install(selected.id)}
+            onRemove={() => selected && remove(selected.id)}
+          />
+        </main>
+      )}
+
+      {view === "installed" && (
+        <main className="scroller">
+          <Installed
+            installed={installed}
+            busy={busy}
+            onUpdate={(addon) => install(addon.id)}
+            onRemove={(addon) => remove(addon.id)}
+            onOpen={openUrl}
+            onGoToBrowse={() => navigate("browse")}
+          />
+        </main>
+      )}
+
+      {view === "sources" && (
+        <main className="scroller">
+          <Sources
+            status={status}
+            refreshing={refreshing}
+            onRefresh={refresh}
+            onToggle={toggleSource}
+            onOpen={openUrl}
+            onSaveApiKey={saveApiKey}
+            onAddRepo={addRepo}
+            onRemoveRepo={removeRepo}
+          />
+        </main>
       )}
     </div>
   );
